@@ -1,0 +1,2521 @@
+---
+title: "Austen & Griffiths (2021) analyses (e.g., RI-CLPMs)"
+output: html_notebook
+---
+
+
+```{r}
+
+library(lavaan)
+library(dplyr)
+library(lubridate)
+library(anytime)
+library(tidyverse)
+library(gghalves)
+library(psych)
+library(car)
+library(ggpubr)
+```
+
+
+#load merged file 
+```{r}
+merged <- read.csv("Final_merged_clean.csv")
+```
+
+#data screening 
+
+##attrition/completers versus non-completers
+
+```{r attrition completers}
+
+#first, assign 0 to NAs so that 1 = complete, 0 = not complete 
+
+merged$Wave_1_complete[is.na(merged$Wave_1_complete)] <- 0
+merged$Wave_2_complete[is.na(merged$Wave_2_complete)] <- 0
+merged$Wave_3_complete[is.na(merged$Wave_3_complete)] <- 0
+merged$Wave_4_complete[is.na(merged$Wave_4_complete)] <- 0
+
+
+merged$Wave_1_complete <- factor(merged$Wave_1_complete,
+levels = c(0, 1),
+labels = c("W1 non-completer", "W1 completer"))
+
+merged$Wave_2_complete <- factor(merged$Wave_2_complete,
+levels = c(0, 1),
+labels = c("W2 non-completer", "W2 completer"))
+
+merged$Wave_3_complete <- factor(merged$Wave_3_complete,
+levels = c(0, 1),
+labels = c("W3 non-completer", "W3 completer"))
+
+
+merged$Wave_4_complete <- factor(merged$Wave_4_complete,
+levels = c(0, 1),
+labels = c("W4 non-completer", "W4 completer"))
+
+```
+
+- wave 1 (completers n = 4859)
+- wave 2 (n = 2279)
+- wave 3 (n = 1944)
+- wave 4 (n = 1737)
+
+
+```{r attrition analyses}
+
+table(merged$Wave_1_complete)
+table(merged$Wave_2_complete)
+table(merged$Wave_3_complete)
+table(merged$Wave_4_complete)
+
+#contingency tables to look at if there are people who completed W3 but not W2, etc 
+
+mytable <- xtabs(~ Wave_2_complete+Wave_3_complete+Wave_4_complete, data=merged)
+
+ftable(mytable) 
+
+```
+
+- contingency table tells us that there are n = 1886 participants who enrolled for W2 onward, but never ended up participating. We will exclude these participants
+
+
+```{r remove unusual StartDate_T3 values}
+library(naniar)
+
+merged <- merged %>% 
+  replace_with_na(replace = list(StartDate_T3 = c(18307, 18308, 18309, 18310, 18321, 18342, 18420)))
+
+
+```
+
+```{r removing participants who did not participate in wave 2 onward}
+
+merged <- merged %>%  
+  dplyr::mutate(participated_at_all = case_when(Wave_2_complete == "W2 non-completer" & Wave_3_complete == "W3 non-completer" 
+                                                & Wave_4_complete == "W4 non-completer" ~ 0,
+                                      Wave_2_complete == "W2 completer" | Wave_3_complete == "W3 completer" | Wave_4_complete == "W4 completer" ~ 1))
+
+table(merged$participated_at_all) #check that it worked - this is accurate, as it matches results earlier that 1886 people did not participate at all 
+
+
+
+
+merged_final <- merged %>%  #filtering to people who participated 
+  filter(participated_at_all == 1)
+
+
+```
+
+
+
+```{r looking at sample sizes from updated dataset}
+table(merged_final$Wave_1_complete)
+table(merged_final$Wave_2_complete)
+table(merged_final$Wave_3_complete)
+table(merged_final$Wave_4_complete)
+
+
+
+mytable <- xtabs(~ Wave_2_complete+Wave_3_complete+Wave_4_complete, data=merged_final)
+
+ftable(mytable) 
+```
+
+```{r filter out <18 yos}
+
+merged_final <- merged_final %>%
+  filter(is.na(Age_T2) | (Age_T2 >= 18))
+
+```
+
+```{r calculate var for drop out versus completed all}
+
+merged_final <- merged_final %>%  #here, 1 = anyone who has dropped out at least once, and 0  = anyone who completed every single wave 
+  mutate(dropout_at_all = case_when(Wave_2_complete == "W2 non-completer" | Wave_3_complete == "W3 non-completer" 
+                                    | Wave_4_complete == "W4 non-completer" ~ 1, 
+                                    Wave_2_complete == "W2 completer" & Wave_3_complete == "W3 completer" & 
+                                      Wave_4_complete == "W4 completer" ~ 0))
+
+table(merged_final$dropout_at_all)
+```
+
+
+###Experiences by BMI graph 
+
+```{r exp by BMI graph }
+
+
+p <- merged_final %>% 
+  ggplot(aes(x = BMI_T2, y = EDS_bodyweight_MEAN_T2)) +
+           geom_smooth() + 
+  labs(x = "BMI T1", y = "Experiences of weight discrimination T1") +
+  theme_classic()
+
+
+p2 <- merged_final %>% 
+  ggplot(aes(x = BMI_T2, y = WBIS_M_MEAN_T2)) +
+           geom_smooth() + 
+  labs(x = "BMI T1", y = "Internalised weight bias T1") +
+  theme_classic()
+
+
+#ggsave("EDS by BMI.tiff", plot = p, dpi = 400)
+
+#ggsave("WBIS by BMI.tiff", plot = p2, dpi = 400)
+
+```
+
+
+##distribution of variables 
+
+###gap between waves 
+
+- date vars: in T3, some dates are unusual values (e.g., 18307) 
+    - can back-calculate thees values by subtracting Duration from EndDate? -- for now, have coded these as NA. 
+    
+    
+- the MEDIAN gap between T1 and T2 (i.e., t2 and t3 on gbw) was 183
+- the MEDIAN gap between T2 and T3 (i.e., t3 and t4) was 183
+
+```{r gaps between waves}
+
+library(ggridges)
+
+
+merged_final <- merged_final %>% 
+  mutate(StartDate_T2 = anydate(StartDate_T2),
+         StartDate_T3 = anydate(StartDate_T3),
+         StartDate_T4 = anydate(StartDate_T4)) %>% 
+  mutate(gap_T2_T3 = as.numeric(difftime(StartDate_T3, StartDate_T2, unit = "days")),
+         gap_T3_T4 = as.numeric(difftime(StartDate_T4, StartDate_T3, unit = "days")))
+
+
+#descriptives
+merged_final %>% 
+  select(starts_with("gap")) %>% 
+  describe()
+
+
+#plotting
+gap <- merged_final %>% 
+  select(starts_with("gap")) %>% 
+  pivot_longer(starts_with("gap"), names_to = "Timepoints", values_to = "Gap_in_days") 
+
+#density plot
+gap_plot <- gap %>% 
+  mutate(Timepoints_labels = case_when(Timepoints == "gap_T3_T4" ~ "T2 to T3", 
+                                       Timepoints == "gap_T2_T3" ~ "T1 to T2")) %>% 
+  ggplot(aes(x = Gap_in_days, y = Timepoints_labels, fill = Timepoints_labels)) +
+  geom_density_ridges() + 
+  labs(x = "Gap (in days)", y = "Timepoints") + 
+  guides(fill = FALSE)+ 
+  theme_classic()
+
+
+#boxplot
+gap_plot_2 <- gap %>% 
+  mutate(Timepoints_labels = case_when(Timepoints == "gap_T3_T4" ~ "T2 to T3", 
+                                       Timepoints == "gap_T2_T3" ~ "T1 to T2")) %>% 
+  ggplot(aes(x = Gap_in_days, y = Timepoints_labels, fill = Timepoints_labels)) +
+  geom_boxplot() + 
+  labs(x = "Gap (in days)", y = "Timepoints") + 
+  guides(fill = FALSE)+ 
+  theme_classic()
+
+
+
+#ggsave("gap_between_waves.tiff", plot = gap_plot, dpi = 400)
+
+```
+  
+##distribution of model variables 
+```{r}
+
+EDS_distribution <- merged_final %>% 
+  select(starts_with(c("EDS"))) %>%  
+        pivot_longer(cols = starts_with("EDS"), names_to = "timepoint", values_to = "value") %>% 
+        ggplot(aes(timepoint, value)) +
+  geom_half_point(side = "l", size = 0.05, alpha = 0.5) + #use points on the other half of the plot 
+  geom_half_boxplot(aes(color = timepoint), side = "l", width = 0.5, alpha = 0.3, nudge = 0.1, outlier.shape = NA, 
+                    size = 0.75) + #assign the boxplot to the left of the halfplot 
+  geom_half_violin(aes(fill = timepoint), side = "r") + 
+                     guides(fill = FALSE, color = FALSE) +
+                     coord_flip() +
+  labs(title = "Experiences of Weight Discrimination (EDS)") + 
+                    scale_x_discrete(labels=c("T2", "T3", "T4")) +
+                    theme_classic() +
+                    theme(axis.title.x = element_blank())
+  
+
+
+WBIS_distribution <- merged_final %>% 
+  select(starts_with(c("WBIS"))) %>%  
+        pivot_longer(cols = starts_with("WBIS"), names_to = "timepoint", values_to = "value") %>% 
+        ggplot(aes(timepoint, value)) +
+  geom_half_point(side = "l", size = 0.05, alpha = 0.5) + #use points on the other half of the plot 
+  geom_half_boxplot(aes(color = timepoint), side = "l", width = 0.5, alpha = 0.3, nudge = 0.1, outlier.shape = NA,
+                    size = 0.75) + #assign the boxplot to the left of the halfplot 
+  geom_half_violin(aes(fill = timepoint), side = "r") + 
+                     guides(fill = FALSE, color = FALSE) +
+                     coord_flip() +
+                    labs(title = "Internalized Weight Bias (WBIS-M)") + 
+                    scale_x_discrete(labels=c("T2", "T3", "T4")) +
+                    theme_classic() +
+                    theme(axis.title.x = element_blank())
+  
+
+
+
+BMI_distribution <- merged_final %>% 
+  select(starts_with(c("BMI"))) %>%  
+        pivot_longer(cols = starts_with("BMI"), names_to = "timepoint", values_to = "value") %>% 
+        ggplot(aes(timepoint, value)) +
+  geom_half_point(side = "l", size = 0.05, alpha = 0.5) + #use points on the other half of the plot 
+  geom_half_boxplot(aes(color = timepoint), side = "l", width = 0.5, alpha = 0.3, nudge = 0.1, outlier.shape = NA,
+                    size = 0.75) + #assign the boxplot to the left of the halfplot 
+  geom_half_violin(aes(fill = timepoint), side = "r") + 
+                     guides(fill = FALSE, color = FALSE) +
+                     coord_flip() +
+                    labs(title = "BMI") + 
+                    scale_x_discrete(labels=c("TI", "T2", "T3", "T4")) +
+                    theme_classic() +
+                    theme(axis.title.x = element_blank())
+  
+
+
+
+Age_distribution <- merged_final %>% 
+  select(starts_with(c("Age"))) %>%  
+        pivot_longer(cols = starts_with("Age"), names_to = "timepoint", values_to = "value") %>% 
+        ggplot(aes(timepoint, value)) +
+  geom_half_point(side = "l", size = 0.05, alpha = 0.5) + #use points on the other half of the plot 
+  geom_half_boxplot(aes(color = timepoint), side = "l", width = 0.5, alpha = 0.3, nudge = 0.1, outlier.shape = NA,
+                    size = 0.75) + #assign the boxplot to the left of the halfplot 
+  geom_half_violin(aes(fill = timepoint), side = "r") + 
+                     guides(fill = FALSE, color = FALSE) +
+                     coord_flip() +
+                    labs(title = "Age") + 
+                    scale_x_discrete(labels=c("T1", "T2", "T3", "T4")) +
+                    theme_classic() +
+                    theme(axis.title.x = element_blank())
+
+
+distributions <- ggarrange(
+  BMI_distribution,
+  Age_distribution,
+EDS_distribution,
+WBIS_distribution,
+BD_distribution,
+WeightBias_distribution, ncol = 2, nrow = 3)
+
+
+ggsave("var_distributions.tiff", plot = distributions, dpi = 400, height = 12, width = 16, units = "in")
+
+```
+
+
+
+##correlation plots
+
+```{r corr plots}
+
+correlations <- merged_final %>% 
+  select(BMI_T2, BMI_T3, BMI_T4, SES_T2, SES_T3, SES_T4, starts_with(c("Age", "EDS", "WBIS", "AQoL_MSD_MEAN"))) %>% 
+  cor(use = "pairwise.complete.obs") #need to specify complete.obs so that R knows what to do with the missing data 
+
+correlations[lower.tri(correlations)] <- NA #remove the redundant lower half of the triangle
+
+
+correlations_long <- correlations %>%  #turn into long format so we can plot
+  as.data.frame() %>%  
+  rownames_to_column("measure2") %>% 
+  pivot_longer(cols = -measure2,
+             names_to = "measure1", 
+             values_to = "cor") %>% 
+  mutate(nice_cor = round(cor, 2)) %>% 
+  filter(measure2 != measure1) %>% 
+  filter(!is.na(cor)) %>% 
+   mutate(measure1 = fct_inorder(measure1),
+         measure2 = fct_inorder(measure2))
+
+heatmap_correlations <- ggplot(correlations_long, 
+       aes(x = measure2, y = measure1, fill = cor)) +
+  geom_tile() +
+  geom_text(aes(label = nice_cor), color = "white", size = 2.5) +
+  scale_fill_viridis(option = "plasma", limits = c(-1, 1), direction = -1) +
+  labs(x = NULL, y = NULL) +
+  coord_equal() +
+  theme_classic() +
+  theme(panel.grid = element_blank(), 
+        axis.text.x = element_text(angle = 45, color = "black", hjust = 1),
+        axis.text.y = element_text(color = "black")) +
+  scale_x_discrete(labels = c("BMI T1", "BMI T2", "BMI T3", "SES T1", "SES T2", "SES T3", "Age T1", "Age T2", "Age T3", 
+                              "Experiences T1", "Experiences T2", 
+                              "Experiences T3", "Internalized T1",
+                              "Internalized T2", "Internalized T3", "Psychological QoL T1",
+                              "Psych QoL T2", "Psych QoL T3")) +
+  scale_y_discrete(labels = c("BMI T2", "BMI T3", "SES T1", "SES T2", "SES T3",
+                              "Age T1", "Age T2", "Age T3", "Experiences T1", 
+                              "Experiences T2", "Experiences T3", "Internalized T1", "Internalized T2", "Internalized T3",
+                              "Psych QoL T1", "Psych QoL T2", "Psych QoL T3"))
+  
+
+
+
+heatmap_correlations
+
+point_correlations <- ggplot(correlations_long, 
+       aes(x = measure2, y = measure1, color = cor)) +
+  # Size by the absolute value so that -0.7 and 0.7 are the same size
+  geom_point(aes(size = abs(cor))) +
+  scale_color_gradient2(low = "#E16462", mid = "white", high = "#0D0887",
+                        limits = c(-1, 1)) +
+  scale_size_area(max_size = 15, limits = c(-1, 1), guide = FALSE) +
+  labs(x = NULL, y = NULL) +
+  coord_equal() +
+  theme_minimal() +
+  theme(panel.grid = element_blank(), 
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+point_correlations
+
+#ggsave("point_correlations.tiff", plot = point_correlations, dpi = 400, height = 12, width = 12, units = "in")
+
+#ggsave("heatmap_correlations.tiff", plot = heatmap_correlations, dpi = 400)
+
+
+
+```
+
+#Descriptive statistcis for model variables 
+
+```{r descriptives table}
+
+descriptives <- merged_final %>% 
+  dplyr::select(starts_with(c("WBIS", "EDS", "BMI", "SES", "Age", "Duration", "AQoL")))
+
+
+
+descriptives_table <- format(stat.desc(descriptives), scientific = FALSE, digits = 1)
+#stat.desc function gives scientific notation as default output, so we want to turn that off 
+#digits = 1 gives us all the values to two dp 
+view(descriptives_table)
+
+```
+
+##country of residence
+
+- 0 = prefer not to say
+- 1 = Australia
+- 2 = Canada
+- 3 = United Kingdom
+- 4 = USA
+- 5 = somewhere else
+
+
+```{r}
+merged_final %>% 
+  select(Country_T1) %>% 
+  table()
+
+```
+
+##start and end dates 
+```{r}
+merged_final %>% 
+  select(starts_with(c("Start", "End"))) %>% 
+  view()
+
+```
+
+##sex identity, attraction, and experiences
+```{r}
+
+sex <- merged_final %>% 
+  select(Sex_identity_T1, Sex_attraction_T1, Sex_experiences_T1) %>% 
+  mutate(Sex_identity_T1 = as.factor(Sex_identity_T1),
+         Sex_attraction_T1 = as.factor(Sex_attraction_T1), 
+         Sex_experiences_T1 = as.factor(Sex_experiences_T1))
+
+
+sex %>% 
+  select(Sex_identity_T1) %>% 
+  table()
+
+
+sex %>% 
+  select(Sex_attraction_T1) %>% 
+  table()
+
+sex %>% 
+  select(Sex_experiences_T1) %>% 
+  table()
+```
+##gender
+
+```{r}
+
+
+merged_final %>% #how many participants identify as cis-gender male versus another identity
+  select(Gender_T1) %>% 
+  table()
+```
+
+```{r}
+
+gender <- merged_final %>%    #selecting participants who identified as a gender identity other than cis-gender male 
+  select(starts_with("Gender_list")) %>% 
+  mutate_all(as.numeric) %>% 
+  mutate(gender_sum = rowSums(select(., Gender_list_0:Gender_list_38), na.rm = TRUE)) %>% 
+  
+gs <- gender %>%  #of the above participants, select those participants who listed one gender identity 
+  filter(gender_sum == 1) 
+
+gs %>% 
+  colSums(na.rm = TRUE) #of those who listed just one identity, find frequency for each gender identity option 
+
+  gm <- gender %>%   #get how many people identified with more than one gender
+  select(gender_sum) %>% 
+  filter(gender_sum >= 2)
+  
+  
+
+```
+
+##race 
+
+- We have race data for 647 participants due to a server-side error in data collection 
+  - Asian: n = 23 (4%)
+  - Black: n = 62 (10%)
+  - Hispanic: n = 51 (8%)
+  - White: n = 402 (62%)
+  - Other racial identity: n = 19 (2%)
+  - Multi-racial identity: n = 99 (15%)
+```{r race freqs}
+
+#making a table with descriptives for the race variables, which were calculated in SPSS
+race_descriptives <- merged_final %>% 
+  select(starts_with("Race")) %>% 
+  describe()
+
+
+#work out percentages
+race_descriptives %>%  
+  select (n) %>% 
+  mutate(prop = (n/647))
+
+
+#participated_at_all
+merged_final <- merged_final %>%  
+  dplyr::mutate(participated_at_all = case_when(Wave_2_complete == "W2 non-completer" & Wave_3_complete == "W3 non-completer" 
+                                                & Wave_4_complete == "W4 non-completer" ~ 0,
+                                      Wave_2_complete == "W2 completer" | Wave_3_complete == "W3 completer" | Wave_4_complete == "W4 completer" ~ 1))
+
+
+
+
+#make race variables into dummies for regression 
+
+
+merged_final$Race_Asian[is.na(merged_final$Race_Asian)] <- 0
+merged_final$Race_Hispanic[is.na(merged_final$Race_Hispanic)] <- 0
+merged_final$Race_White[is.na(merged_final$Race_White)] <- 0
+merged_final$Race_Other[is.na(merged_final$Race_Other)] <- 0
+merged_final$Race_Black[is.na(merged_final$Race_Black)] <- 0
+merged_final$Race_multi[is.na(merged_final$Race_multi)] <- 0
+
+
+```
+
+
+###analyses comparing demographics for completers, samples
+- logistic regression
+  - outcome: dropout_at_all (1 = yes (n = 1901), 0 = no (i.e., completed all waves; n = 1072))
+  - IVs = demographic variables @ T2
+    - EDS 
+    - IWB
+    - BMI
+    - Age
+    - Race - all dummy-coded variables 
+    
+    
+ - for every unit increase in age, the odds of dropping out at all (versus completing all waves) DECREASES by 0.02/a factor of 0.98 (odds ratio)
+- for every unit increase in experiences of weight discrimination, the odds of dropping out at all (versus completing all waves) INCREASES by 0.22 /a factor of 1.24 (odds ratio)
+- for every unit increase in internalized weight bias, the odds of dropping out at all (versus completing all waves) DECREASES by 0.09 /a factor of 0.91 (odds ratio)
+- odds of dropping out not significantly predicted by BMI, psychological quality of life, or race 
+
+```{r logistic regression}
+library(aod)
+library(ggplot2)
+
+#dropout_at_all: a positive regression coefficient here would indicate that a unit increase in X increases log odds of dropping out at all by X, versus completing all waves
+
+
+mylogit <- 
+  glm(dropout_at_all ~ Likelihood_T1 + BMI_T2 + Age_T2 + EDS_bodyweight_MEAN_T2 + WBIS_M_MEAN_T2 + AQoL_MSD_MEAN_T2 + Race_Asian +
+        Race_Hispanic + Race_White + Race_Other + Race_Black + Race_multi, data = merged_final, family = "binomial")
+
+summary(mylogit)
+
+
+#calculating odds ratios: for every unit increase in X, the odds of dropping out at all (versus completing all waves) increases by a factor of [ODDS RATIO VALUE]
+
+exp(coef(mylogit))
+exp(cbind(OR = coef(mylogit), confint(mylogit)))
+```
+
+##anovas comparing characteristics of timepoint samples 
+```{r}
+#experiences of weight discriminatino
+# Compute the analysis of variance
+y3_eds <- y3_eds %>% 
+  mutate(Wave = as.factor(Wave))
+res.aov.eds <- aov(EDS_bodyweight_MEAN_T2 ~ Wave, data = y3_eds)
+# Summary of the analysis
+summary(res.aov.eds)
+
+#internalized weight bias
+y3_wbis <- y3_wbis %>% 
+  mutate(Wave = as.factor(Wave))
+res.aov.wbis <- aov(WBIS_M_MEAN_T2 ~ Wave, data = y3_wbis)
+summary(res.aov.wbis)
+
+#psych qol 
+y3_aqol <- y3_aqol %>% 
+  mutate(Wave = as.factor(Wave))
+res.aov.aqol <- aov(AQoL_MSD_TOTAL_T2 ~ Wave, data = y3_aqol)
+summary(res.aov.aqol)
+
+#age
+y3_age <- y3_age %>%
+  mutate(Wave = as.factor(Wave))
+res.aov.age <- aov(Age_T2 ~ Wave, data = y3_age)
+summary(res.aov.age)
+TukeyHSD(res.aov.age) #results are sig. so run Tukey's posthoc comparisons
+
+#ses
+y3_ses <- y3_ses %>% 
+  mutate(Wave = as.factor(Wave))
+res.aov.ses <- aov(SES_T2 ~ Wave, data = y3_ses)
+summary(res.aov.ses)
+TukeyHSD(res.aov.ses)
+
+#BMI
+y3_bmi <- y3_bmi %>% 
+  mutate(Wave = as.factor(Wave))
+res.aov.bmi <- aov(BMI_T2 ~ Wave, data = y3_bmi)
+summary(res.aov.bmi)
+
+
+```
+
+#standardise variables for RI-CLPMs
+- here, I've calculated standardized variables for all of the variables going into our RI-CLPMs. This means that we can get a 95% CI around all of our standardized coefficients, as all of the output is standardized as a result of this. 
+
+```{r standardise}
+
+merged_final <- merged_final %>% 
+  mutate(ZWBIS_M_T2 = (WBIS_M_MEAN_T2 - mean(WBIS_M_MEAN_T2, na.rm = TRUE))/sd(WBIS_M_MEAN_T2, na.rm = TRUE),
+         ZWBIS_M_T3 = (WBIS_M_MEAN_T3 - mean(WBIS_M_MEAN_T3, na.rm = TRUE))/sd(WBIS_M_MEAN_T3, na.rm = TRUE),
+         ZWBIS_M_T4 = (WBIS_M_MEAN_T4 - mean(WBIS_M_MEAN_T4, na.rm = TRUE))/sd(WBIS_M_MEAN_T4, na.rm = TRUE),
+         ZBMI_T2 = (BMI_T2 - mean(BMI_T2, na.rm = TRUE))/sd(BMI_T2, na.rm = TRUE),
+         ZBMI_T3 = (BMI_T3 - mean(BMI_T3, na.rm = TRUE))/sd(BMI_T3, na.rm = TRUE),
+         ZBMI_T4 = (BMI_T4 - mean(BMI_T4, na.rm = TRUE))/sd(BMI_T4, na.rm = TRUE),
+         ZEDS_T2 = (EDS_bodyweight_MEAN_T2 - mean(EDS_bodyweight_MEAN_T2, na.rm = TRUE))/sd(EDS_bodyweight_MEAN_T2, na.rm = TRUE),
+         ZEDS_T3 = (EDS_bodyweight_MEAN_T3 - mean(EDS_bodyweight_MEAN_T3, na.rm = TRUE))/sd(EDS_bodyweight_MEAN_T3, na.rm = TRUE),
+         ZEDS_T4 = (EDS_bodyweight_MEAN_T4 - mean(EDS_bodyweight_MEAN_T4, na.rm = TRUE))/sd(EDS_bodyweight_MEAN_T4, na.rm = TRUE),
+         ZAQoL_T2 = (AQoL_MSD_TOTAL_T2 - mean(AQoL_MSD_TOTAL_T2, na.rm = TRUE))/sd(AQoL_MSD_TOTAL_T2, na.rm = TRUE),
+         ZAQoL_T3 = (AQoL_MSD_TOTAL_T3 - mean(AQoL_MSD_TOTAL_T3, na.rm = TRUE))/sd(AQoL_MSD_TOTAL_T3, na.rm = TRUE),
+         ZAQoL_T4 = (AQoL_MSD_TOTAL_T4 - mean(AQoL_MSD_TOTAL_T4, na.rm = TRUE))/sd(AQoL_MSD_TOTAL_T4, na.rm = TRUE))
+
+
+```
+#RI-CLPMs - constrained with standardised variables 
+- running models with standardised variables so we can get 95% CIs around the standardised coefficients - i.e., since we have already standardised them, then the default reg coefficients will all be standardised, 
+
+```{r EDS WBIS RICLPM constrained Z, eval = F}
+
+RICLPM_1z <- '
+  # Create between components (random intercepts)
+  RIx =~ 1*ZEDS_T2 + 1*ZEDS_T3 + 1*ZEDS_T4   #the 1* constrains the factor loadings to 1 
+  RIy =~ 1*ZWBIS_M_T2 + 1*ZWBIS_M_T3 + 1*ZWBIS_M_T4
+ 
+  
+  # Create within-person centered variables (i.e., the within-person portion of the observed scores) 
+ 
+  wx2 =~ 1*ZEDS_T2
+  wx3 =~ 1*ZEDS_T3
+  wx4 =~ 1*ZEDS_T4
+  
+  wy2 =~ 1*ZWBIS_M_T2
+  wy3 =~ 1*ZWBIS_M_T3
+  wy4 =~ 1*ZWBIS_M_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables. (cross-lagged and auto-regressive effects)
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2       #i.e., we arent predetermining their value (e.g., factor loading of 1), we are just letting them be equal over time
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+  
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx    #variance
+  RIy ~~ RIy
+  RIx ~~ RIy    #covariance
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.1z.fit <- lavaan(RICLPM_1z, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.1z.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+```
+
+
+
+```{r WBIS AQoL constrained Z, eval = F}
+
+RICLPM.4z <- '
+  # Create between components (random intercepts)
+  RIx =~1*1*ZWBIS_M_T2 + 1*1*ZWBIS_M_T3 + 1*1*ZWBIS_M_T4
+  RIy =~ 1*ZAQoL_T2 + 1*ZAQoL_T3 + 1*ZAQoL_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*1*ZWBIS_M_T2
+  wx3 =~ 1*1*ZWBIS_M_T3
+  wx4 =~ 1*1*ZWBIS_M_T4
+  
+  wy2 =~ 1*ZAQoL_T2
+  wy3 =~ 1*ZAQoL_T3
+  wy4 =~ 1*ZAQoL_T4
+  
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.4z.fit <- lavaan(RICLPM.4z, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.4z.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r WBIS BMI constrained Z, eval = F}
+
+RICLPM.5z <- '
+  # Create between components (random intercepts)
+  RIx =~1*1*ZWBIS_M_T2 + 1*1*ZWBIS_M_T3 + 1*1*ZWBIS_M_T4
+  RIy =~ 1*ZBMI_T2 + 1*ZBMI_T3 + 1*ZBMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*1*ZWBIS_M_T2
+  wx3 =~ 1*1*ZWBIS_M_T3
+  wx4 =~ 1*1*ZWBIS_M_T4
+  
+  wy2 =~ 1*ZBMI_T2
+  wy3 =~ 1*ZBMI_T3
+  wy4 =~ 1*ZBMI_T4
+  
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.5z.fit <- lavaan(RICLPM.5z, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.5z.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r EDS AQoL constrained Z, eval = F}
+
+RICLPM_3z <- '
+  # Create between components (random intercepts)
+  RIx =~1*ZEDS_T2 + 1*ZEDS_T3 + 1*ZEDS_T4
+  RIy =~ 1*ZAQoL_T2 + 1*ZAQoL_T3 + 1*ZAQoL_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*ZEDS_T2
+  wx3 =~ 1*ZEDS_T3
+  wx4 =~ 1*ZEDS_T4
+  
+  wy2 =~ 1*ZAQoL_T2
+  wy3 =~ 1*ZAQoL_T3
+  wy4 =~ 1*ZAQoL_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.3z.fit <- lavaan(RICLPM_3z, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.3z.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r BMI EDS constrained Z, eval = F}
+
+RICLPM_2z <- '
+  # Create between components (random intercepts)
+  RIx =~1*ZEDS_T2 + 1*ZEDS_T3 + 1*ZEDS_T4
+  RIy =~ 1*ZBMI_T2 + 1*ZBMI_T3 + 1*ZBMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*ZEDS_T2
+  wx3 =~ 1*ZEDS_T3
+  wx4 =~ 1*ZEDS_T4
+  
+  wy2 =~ 1*ZBMI_T2
+  wy3 =~ 1*ZBMI_T3
+  wy4 =~ 1*ZBMI_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.2z.fit <- lavaan(RICLPM_2z, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.2z.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+```
+
+
+#RI-CLPMs - non-standardised 
+
+
+- '=~': use when defining a latent variable (e.g., random intercepts and within-person centred vars)
+- '~': regressed on - use when defining lagged effects. 
+- Pre-multiply (*) components with the same label to constrain them to the same value  
+
+- int.ov.free: if FALSE, the intercepts of the observed vars (i.e., group means?) are fixed to zero. if TRUE, free to vary (Hamaker et al., 2015 suggest making group means free to vary over time and if this doesn't work, need to investigate source of misfit. If fine, then proceed)
+
+
+##EDS <-> WBIS
+- throughout, we have some code looking at RI-CLPMs by BMI category. However, these analyses are likely under-powered in our sample. Readers may consult this code out of interest re: how to constrain cross-lagged and auto-regressive parameters to be equal within groups over time in the Lavaan code 
+
+```{r EDS WBIS unconstrained, eval = F}
+
+RICLPM_1a <- '
+  # Create between components (random intercepts)
+  RIx =~ 1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4   #the 1* constrains the factor loadings to 1 
+  RIy =~ 1*WBIS_M_MEAN_T2+ 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+ 
+  
+  # Create within-person centered variables (i.e., the within-person portion of the observed scores) 
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*WBIS_M_MEAN_T2
+  wy3 =~ 1*WBIS_M_MEAN_T3
+  wy4 =~ 1*WBIS_M_MEAN_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables. (cross-lagged and auto-regressive effects)
+  wx3 ~ wx2 + wy2
+  wy3 ~ wx2 + wy2       
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+  
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx    #variance
+  RIy ~~ RIy
+  RIx ~~ RIy    #covariance
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.1a.fit <- lavaan(RICLPM_1a, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.1a.fit, standardized = T, fit.measures = TRUE)
+```
+
+
+```{r EDS WBIS RICLPM constrained, eval = F}
+
+RICLPM_1b <- '
+  # Create between components (random intercepts)
+  RIx =~ 1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4   #the 1* constrains the factor loadings to 1 
+  RIy =~ 1*WBIS_M_MEAN_T2+ 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+ 
+  
+  # Create within-person centered variables (i.e., the within-person portion of the observed scores) 
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*WBIS_M_MEAN_T2
+  wy3 =~ 1*WBIS_M_MEAN_T3
+  wy4 =~ 1*WBIS_M_MEAN_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables. (cross-lagged and auto-regressive effects)
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2       #i.e., we arent predetermining their value (e.g., factor loading of 1), we are just letting them be equal over time
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+  
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx    #variance
+  RIy ~~ RIy
+  RIx ~~ RIy    #covariance
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.1b.fit <- lavaan(RICLPM_1b, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.1b.fit, standardized = T, fit.measures = TRUE)
+
+
+anova(RICLPM.1a.fit, RICLPM.1b.fit)
+```
+- We estimate the traditional CLPM by setting the variance and covariance of the random intercepts to 0 
+- Chi square test & interpreting the AIC and BIC values suggests that the traditional CLPM fits significantly worse than the RI-CLPM (p < .001)
+
+```{r EDS WBIS CLPM, eval = F}
+
+CLPM_1 <- '
+  # Create between components (random intercepts)
+  RIx =~ 1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4   #the 1* constrains the factor loadings to 1 
+  RIy =~ 1*WBIS_M_MEAN_T2+ 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+ 
+  
+  # Create within-person centered variables (i.e., the within-person portion of the observed scores) 
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*WBIS_M_MEAN_T2
+  wy3 =~ 1*WBIS_M_MEAN_T3
+  wy4 =~ 1*WBIS_M_MEAN_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables. (cross-lagged and auto-regressive effects)
+  wx3 ~ wx2 + wy2      
+  wy3 ~ wx2 + wy2       
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+  
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ 0*RIx    #variance
+  RIy ~~ 0*RIy
+  RIx ~~ 0*RIy    #covariance
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+CLPM.1.fit <- lavaan(CLPM_1, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(CLPM.1.fit, standardized = T, fit.measures = TRUE)
+
+
+anova(RICLPM.1a.fit, CLPM.1.fit)
+
+```
+
+
+
+```{r EDS WBIS RICLPM constrained by BMI, eval = F}
+
+RICLPM_1c <- '
+  # Create between components (random intercepts)
+  RIx =~ 1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4   #the 1* constrains the factor loadings to 1 
+  RIy =~ 1*WBIS_M_MEAN_T2+ 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+ 
+  
+  # Create within-person centered variables (i.e., the within-person portion of the observed scores) 
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*WBIS_M_MEAN_T2
+  wy3 =~ 1*WBIS_M_MEAN_T3
+  wy4 =~ 1*WBIS_M_MEAN_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables. (cross-lagged and auto-regressive effects)
+  wx3 ~ c(a1, a2, a3)*wx2 + c(b1, b2, b3)*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c(c1, c2, c3)*wx2 + c(d1, d2, d3)*wy2       #i.e., we arent predetermining their value (e.g., factor loading of 1), we are just letting them be equal over time
+  wx4 ~ c(a1, a2, a3)*wx3 + c(b1, b2, b3)*wy3
+  wy4 ~ c(c1, c2, c3)*wx3 + c(d1, d2, d3)*wy3
+  
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx    #variance
+  RIy ~~ RIy
+  RIx ~~ RIy    #covariance
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.1c.fit <- lavaan(RICLPM_1c, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T, group = "BMI_T2_categories") 
+summary(RICLPM.1c.fit, standardized = T, fit.measures = TRUE)
+
+```
+##BMI <-> Internalised weight bias
+
+```{r BMI WBIS UNCONSTRAINED, eval = F}
+
+RICLPM.5a <- '
+  # Create between components (random intercepts)
+  RIx =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*WBIS_M_MEAN_T2
+  wx3 =~ 1*WBIS_M_MEAN_T3
+  wx4 =~ 1*WBIS_M_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+
+   # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ wx2 + wy2      
+  wy3 ~ wx2 + wy2
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.5a.fit <- lavaan(RICLPM.5a, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.5a.fit, standardized = T, fit.measures = TRUE)
+
+
+```
+
+
+```{r BMI WBIS CONSTRAINED, eval = F}
+
+RICLPM.5b <- '
+  # Create between components (random intercepts)
+  RIx =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*WBIS_M_MEAN_T2
+  wx3 =~ 1*WBIS_M_MEAN_T3
+  wx4 =~ 1*WBIS_M_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+
+   # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.5b.fit <- lavaan(RICLPM.5b, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.5b.fit, standardized = T, fit.measures = TRUE)
+
+anova(RICLPM.5a.fit, RICLPM.5b.fit)
+```
+
+```{r BMI WBIS CLPM, eval = F}
+
+CLPM_5 <- '
+   # Create between components (random intercepts)
+  RIx =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*WBIS_M_MEAN_T2
+  wx3 =~ 1*WBIS_M_MEAN_T3
+  wx4 =~ 1*WBIS_M_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables. (cross-lagged and auto-regressive effects)
+  wx3 ~ wx2 + wy2      
+  wy3 ~ wx2 + wy2       
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+  
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ 0*RIx    #variance
+  RIy ~~ 0*RIy
+  RIx ~~ 0*RIy    #covariance
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+CLPM.5.fit <- lavaan(CLPM_5, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(CLPM.5.fit, standardized = T, fit.measures = TRUE)
+
+
+anova(RICLPM.5a.fit, CLPM.5.fit)
+
+```
+
+
+```{r BMI WBIS CONSTRAINED by BMI, eval = F}
+
+RICLPM.5c <- '
+  # Create between components (random intercepts)
+  RIx =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*WBIS_M_MEAN_T2
+  wx3 =~ 1*WBIS_M_MEAN_T3
+  wx4 =~ 1*WBIS_M_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+
+   # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ c(a1, a2, a3)*wx2 + c(b1, b2, b3)*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c(c1, c2, c3)*wx2 + c(d1, d2, d3)*wy2       #i.e., we arent predetermining their value (e.g., factor loading of 1), we are just letting them be equal over time
+  wx4 ~ c(a1, a2, a3)*wx3 + c(b1, b2, b3)*wy3
+  wy4 ~ c(c1, c2, c3)*wx3 + c(d1, d2, d3)*wy3
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.5c.fit <- lavaan(RICLPM.5c, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T, group = "BMI_T2_categories") 
+summary(RICLPM.5c.fit, standardized = T, fit.measures = TRUE)
+
+```
+
+
+
+
+
+
+##BMI <-> EDS
+
+```{r BMI EDS unconstrained, eval = F}
+
+RICLPM_2a <- '
+  # Create between components (random intercepts)
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ wx2 + wy2      
+  wy3 ~ wx2 + wy2
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.2a.fit <- lavaan(RICLPM_2a, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.2a.fit, standardized = T, fit.measures = TRUE)
+
+
+```
+
+
+```{r BMI EDS constrained, eval = F}
+
+RICLPM_2b <- '
+  # Create between components (random intercepts)
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.2b.fit <- lavaan(RICLPM_2b, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.2b.fit, standardized = T, fit.measures = TRUE)
+
+anova(RICLPM.2a.fit, RICLPM.2b.fit) #compare fit of constrained and unconstrained
+```
+
+
+```{r BMI EDS CLPM, eval = F}
+
+CLPM_2 <- '
+  # Create between components (random intercepts)
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ wx2 + wy2      
+  wy3 ~ wx2 + wy2
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ 0*RIx
+  RIy ~~ 0*RIy
+  RIx ~~ 0*RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+CLPM.2.fit <- lavaan(CLPM_2, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.2a.fit, standardized = T, fit.measures = TRUE)
+
+
+anova(RICLPM.2a.fit, CLPM.2.fit)
+```
+
+```{r BMI EDS constrained by BMI - supplementary, eval = F}
+
+RICLPM_2c <- '
+  # Create between components (random intercepts)
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ c(a1, a2, a3)*wx2 + c(b1, b2, b3)*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c(c1, c2, c3)*wx2 + c(d1, d2, d3)*wy2       #i.e., we arent predetermining their value (e.g., factor loading of 1), we are just letting them be equal over time
+  wx4 ~ c(a1, a2, a3)*wx3 + c(b1, b2, b3)*wy3
+  wy4 ~ c(c1, c2, c3)*wx3 + c(d1, d2, d3)*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.2c.fit <- lavaan(RICLPM_2c, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T, group = "BMI_T2_categories") 
+summary(RICLPM.2c.fit, standardized = T, fit.measures = TRUE)
+
+```
+
+
+
+#EDS <-> AQoL 
+
+```{r EDS AQoL unconstrained, eval = F}
+
+RICLPM_3a <- '
+  # Create between components (random intercepts)
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+  RIy =~ 1*AQoL_MSD_MEAN_T2 + 1*AQoL_MSD_MEAN_T3 + 1*AQoL_MSD_MEAN_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*AQoL_MSD_MEAN_T2
+  wy3 =~ 1*AQoL_MSD_MEAN_T3
+  wy4 =~ 1*AQoL_MSD_MEAN_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ wx2 + wy2      
+  wy3 ~ wx2 + wy2
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.3a.fit <- lavaan(RICLPM_3a, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.3a.fit, standardized = T, fit.measures = TRUE)
+
+
+```
+
+
+```{r EDS AQoL constrained, eval = F}
+
+RICLPM_3b <- '
+  # Create between components (random intercepts)
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+  RIy =~ 1*AQoL_MSD_MEAN_T2 + 1*AQoL_MSD_MEAN_T3 + 1*AQoL_MSD_MEAN_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*AQoL_MSD_MEAN_T2
+  wy3 =~ 1*AQoL_MSD_MEAN_T3
+  wy4 =~ 1*AQoL_MSD_MEAN_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.3b.fit <- lavaan(RICLPM_3b, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.3b.fit, standardized = T, fit.measures = TRUE)
+
+anova(RICLPM.3a.fit, RICLPM.3b.fit) #compare the fit of the constrained and unconstrained models
+
+```
+
+
+```{r EDS AQoL CLPM, eval = F}
+
+CLPM_3 <- '
+  # Create between components (random intercepts)
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+  RIy =~ 1*AQoL_MSD_MEAN_T2 + 1*AQoL_MSD_MEAN_T3 + 1*AQoL_MSD_MEAN_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*AQoL_MSD_MEAN_T2
+  wy3 =~ 1*AQoL_MSD_MEAN_T3
+  wy4 =~ 1*AQoL_MSD_MEAN_T4
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ wx2 + wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ wx2 + wy2
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ 0*RIx
+  RIy ~~ 0*RIy
+  RIx ~~ 0*RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+CLPM.3.fit <- lavaan(CLPM_3, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(CLPM.3.fit, standardized = T, fit.measures = TRUE)
+
+
+anova(RICLPM.3a.fit, CLPM.3.fit) #compare the fit of the RICLPM and CLPM
+```
+
+
+#IWB <-> AQoL 
+
+
+```{r WBIS PQoL UNCONSTRAINED, eval = F}
+
+RICLPM.4a <- '
+  # Create between components (random intercepts)
+  RIx =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+  RIy =~ 1*AQoL_MSD_MEAN_T2 + 1*AQoL_MSD_MEAN_T3 + 1*AQoL_MSD_MEAN_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*WBIS_M_MEAN_T2
+  wx3 =~ 1*WBIS_M_MEAN_T3
+  wx4 =~ 1*WBIS_M_MEAN_T4
+  
+  wy2 =~ 1*AQoL_MSD_MEAN_T2
+  wy3 =~ 1*AQoL_MSD_MEAN_T3
+  wy4 =~ 1*AQoL_MSD_MEAN_T4
+  
+
+   # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ wx2 + wy2      
+  wy3 ~ wx2 + wy2
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.4a.fit <- lavaan(RICLPM.4a, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.4a.fit, standardized = T, fit.measures = TRUE)
+
+```
+
+
+```{r WBIS AQoL constrained, eval = F}
+
+RICLPM.4b <- '
+  # Create between components (random intercepts)
+  RIx =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+  RIy =~ 1*AQoL_MSD_MEAN_T2 + 1*AQoL_MSD_MEAN_T3 + 1*AQoL_MSD_MEAN_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*WBIS_M_MEAN_T2
+  wx3 =~ 1*WBIS_M_MEAN_T3
+  wx4 =~ 1*WBIS_M_MEAN_T4
+  
+  wy2 =~ 1*AQoL_MSD_MEAN_T2
+  wy3 =~ 1*AQoL_MSD_MEAN_T3
+  wy4 =~ 1*AQoL_MSD_MEAN_T4
+  
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.4b.fit <- lavaan(RICLPM.4b, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.4b.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+anova(RICLPM.4a.fit, RICLPM.4b.fit) #compare the fit of the constrained and unconstrained models
+
+```
+
+```{r WBIS AQoL CLPM, eval = F}
+
+CLPM_4 <- '
+  # Create between components (random intercepts)
+  RIx =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+  RIy =~ 1*AQoL_MSD_MEAN_T2 + 1*AQoL_MSD_MEAN_T3 + 1*AQoL_MSD_MEAN_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*WBIS_M_MEAN_T2
+  wx3 =~ 1*WBIS_M_MEAN_T3
+  wx4 =~ 1*WBIS_M_MEAN_T4
+  
+  wy2 =~ 1*AQoL_MSD_MEAN_T2
+  wy3 =~ 1*AQoL_MSD_MEAN_T3
+  wy4 =~ 1*AQoL_MSD_MEAN_T4
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ wx2 + wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ wx2 + wy2
+  wx4 ~ wx3 + wy3
+  wy4 ~ wx3 + wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ 0*RIx
+  RIy ~~ 0*RIy
+  RIx ~~ 0*RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+CLPM.4.fit <- lavaan(CLPM_4, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(CLPM.4.fit, standardized = T, fit.measures = TRUE)
+
+
+anova(RICLPM.4a.fit, CLPM.4.fit) #compare the fit of the RICLPM and CLPM
+```
+
+#RI-CLPMs including covariates 
+
+##standardised with covariates 
+- use 'ml.x' for missing data, because 'ML' will delete any cases with missing data for covariates. ml.x will retain cases with missing data for covariates. 
+- when including covariates in RI-CLPMs, regress the random intercepts onto all of the covariates (other options for including time invariant predictors are discussed in Mulder & Hamaker (2020))
+
+```{r EDS WBIS RICLPM constrained Z covariates, eval = F}
+
+RICLPM_1z.covariates <- '
+  # Create between components (random intercepts)
+  RIx =~ 1*ZEDS_T2 + 1*ZEDS_T3 + 1*ZEDS_T4   #the 1* constrains the factor loadings to 1 
+  RIy =~ 1*ZWBIS_M_T2 + 1*ZWBIS_M_T3 + 1*ZWBIS_M_T4
+ 
+  
+  # Create within-person centered variables (i.e., the within-person portion of the observed scores) 
+ 
+  wx2 =~ 1*ZEDS_T2
+  wx3 =~ 1*ZEDS_T3
+  wx4 =~ 1*ZEDS_T4
+  
+  wy2 =~ 1*ZWBIS_M_T2
+  wy3 =~ 1*ZWBIS_M_T3
+  wy4 =~ 1*ZWBIS_M_T4
+  
+    # Regression of random intercepts on covariates
+  RIx + RIy ~  Race_Asian + Race_White + Race_Hispanic + Race_Black + Race_multi + ZAge_T2 + ZBMI_T1 + ZSES  # Constrained over time. 
+
+  
+
+  # Estimate the lagged effects between the within-person centered variables. (cross-lagged and auto-regressive effects)
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2       #i.e., we arent predetermining their value (e.g., factor loading of 1), we are just letting them be equal over time
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+  
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx    #variance
+  RIy ~~ RIy
+  RIx ~~ RIy    #covariance
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.1z.covariates.fit <- lavaan(RICLPM_1z.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.1z.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+```
+
+
+
+```{r WBIS AQoL constrained Z covariates, eval = F}
+
+RICLPM.4z.covariates <- '
+  # Create between components (random intercepts)
+  RIx =~1*1*ZWBIS_M_T2 + 1*1*ZWBIS_M_T3 + 1*1*ZWBIS_M_T4
+  RIy =~ 1*ZAQoL_T2 + 1*ZAQoL_T3 + 1*ZAQoL_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*1*ZWBIS_M_T2
+  wx3 =~ 1*1*ZWBIS_M_T3
+  wx4 =~ 1*1*ZWBIS_M_T4
+  
+  wy2 =~ 1*ZAQoL_T2
+  wy3 =~ 1*ZAQoL_T3
+  wy4 =~ 1*ZAQoL_T4
+  
+     # Regression of random intercepts on covariates
+  RIx + RIy ~ ZSES + ZBMI_T1 + Race_Asian  + Race_White + Race_Hispanic + Race_Black + Race_multi + ZAge_T2 # Constrained over time. 
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.4z.covariates.fit <- lavaan(RICLPM.4z.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.4z.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r WBIS BMI constrained Z covariates, eval = F}
+
+RICLPM.5z.covariates <- '
+  # Create between components (random intercepts)
+
+  RIx =~ 1*ZBMI_T2 + 1*ZBMI_T3 + 1*ZBMI_T4
+    RIy =~1*ZWBIS_M_T2 + 1*ZWBIS_M_T3 + 1*ZWBIS_M_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*ZBMI_T2
+  wx3 =~ 1*ZBMI_T3
+  wx4 =~ 1*ZBMI_T4
+ 
+  wy2 =~ 1*ZWBIS_M_T2
+  wy3 =~ 1*ZWBIS_M_T3
+  wy4 =~ 1*ZWBIS_M_T4
+  
+
+  
+     # Regression of random intercepts on covariates
+  RIx + RIy ~ ZSES + Race_Asian + Race_White + Race_Hispanic + Race_Black + Race_multi + ZAge_T2 # Constrained over time. 
+  
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.5z.covariates.fit <- lavaan(RICLPM.5z.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.5z.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r EDS AQoL constrained Z covariates, eval = F}
+
+RICLPM_3z.covariates <- '
+  # Create between components (random intercepts)
+  RIx =~1*ZEDS_T2 + 1*ZEDS_T3 + 1*ZEDS_T4
+  RIy =~ 1*ZAQoL_T2 + 1*ZAQoL_T3 + 1*ZAQoL_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*ZEDS_T2
+  wx3 =~ 1*ZEDS_T3
+  wx4 =~ 1*ZEDS_T4
+  
+  wy2 =~ 1*ZAQoL_T2
+  wy3 =~ 1*ZAQoL_T3
+  wy4 =~ 1*ZAQoL_T4
+  
+     # Regression of random intercepts on covariates
+  RIx + RIy ~ ZSES + ZBMI_T1 +Race_Asian + Race_White + Race_Hispanic + Race_Black + Race_multi + ZAge_T2 # Constrained over time. 
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.3z.covariates.fit <- lavaan(RICLPM_3z.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.3z.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r BMI EDS constrained Z covariates, eval = F}
+
+RICLPM_2z.covariates <- '
+  # Create between components (random intercepts)
+  RIx =~1*ZEDS_T2 + 1*ZEDS_T3 + 1*ZEDS_T4
+  RIy =~ 1*ZBMI_T2 + 1*ZBMI_T3 + 1*ZBMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*ZEDS_T2
+  wx3 =~ 1*ZEDS_T3
+  wx4 =~ 1*ZEDS_T4
+  
+  wy2 =~ 1*ZBMI_T2
+  wy3 =~ 1*ZBMI_T3
+  wy4 =~ 1*ZBMI_T4
+  
+     # Regression of random intercepts on covariates
+  RIx + RIy ~ ZSES + Race_Asian +  Race_White + Race_Hispanic + Race_Black + Race_multi + ZAge_T2 # Constrained over time. 
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.2z.covariates.fit <- lavaan(RICLPM_2z.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.2z.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+```
+
+
+##unstandardized with covariates
+
+
+```{r EDS WBIS RICLPM constrained covariates, eval = F}
+
+RICLPM_1.covariates <- '
+   RIx =~ 1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4   #the 1* constrains the factor loadings to 1 
+  RIy =~ 1*WBIS_M_MEAN_T2+ 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+ 
+  
+  # Create within-person centered variables (i.e., the within-person portion of the observed scores) 
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*WBIS_M_MEAN_T2
+  wy3 =~ 1*WBIS_M_MEAN_T3
+  wy4 =~ 1*WBIS_M_MEAN_T4
+  
+  
+    # Regression of random intercepts on covariates
+  RIx + RIy ~  Race_Asian + Race_White + Race_Hispanic + Race_Black + Race_multi + Age_T2 + BMI_T1 + SES_T1  # Constrained over time. 
+
+  
+
+  # Estimate the lagged effects between the within-person centered variables. (cross-lagged and auto-regressive effects)
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2       #i.e., we arent predetermining their value (e.g., factor loading of 1), we are just letting them be equal over time
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+  
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx    #variance
+  RIy ~~ RIy
+  RIx ~~ RIy    #covariance
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.1.covariates.fit <- lavaan(RICLPM_1.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.1.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+```
+
+
+
+```{r WBIS AQoL constrained covariates, eval = F}
+
+RICLPM.4.covariates <- '
+   # Create between components (random intercepts)
+  RIx =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+ RIy =~ 1*ZAQoL_T2 + 1*ZAQoL_T3 + 1*ZAQoL_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*WBIS_M_MEAN_T2
+  wx3 =~ 1*WBIS_M_MEAN_T3
+  wx4 =~ 1*WBIS_M_MEAN_T4
+  
+  wy2 =~ 1*ZAQoL_T2
+  wy3 =~ 1*ZAQoL_T3
+  wy4 =~ 1*ZAQoL_T4
+  
+  
+     # Regression of random intercepts on covariates
+  RIx + RIy ~ SES_T1 + BMI_T1 + Race_Asian  + Race_White + Race_Hispanic + Race_Black + Race_multi + Age_T2 # Constrained over time. 
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.4.covariates.fit <- lavaan(RICLPM.4.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.4.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r WBIS BMI constrained covariates, eval = F}
+
+RICLPM.5.covariates <- '
+  # Create between components (random intercepts)
+  
+    RIx =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+
+ RIy =~1*WBIS_M_MEAN_T2 + 1*WBIS_M_MEAN_T3 + 1*WBIS_M_MEAN_T4
+
+ 
+  
+  # Create within-person centered variables
+ 
+   wx2 =~ 1*BMI_T2
+  wx3 =~ 1*BMI_T3
+  wx4 =~ 1*BMI_T4
+ 
+ 
+  wy2 =~ 1*WBIS_M_MEAN_T2
+  wy3 =~ 1*WBIS_M_MEAN_T3
+  wy4 =~ 1*WBIS_M_MEAN_T4
+  
+
+
+  
+     # Regression of random intercepts on covariates
+  RIx + RIy ~ SES_T1 + Race_Asian + Race_White + Race_Hispanic + Race_Black + Race_multi + Age_T2 # Constrained over time. 
+  
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.5.covariates.fit <- lavaan(RICLPM.5.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.5.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r EDS AQoL constrained covariates, eval = F}
+
+RICLPM_3.covariates <- '
+   # Create between components (random intercepts)
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+   RIy =~ 1*ZAQoL_T2 + 1*ZAQoL_T3 + 1*ZAQoL_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*ZAQoL_T2
+  wy3 =~ 1*ZAQoL_T3
+  wy4 =~ 1*ZAQoL_T4
+  
+     # Regression of random intercepts on covariates
+  RIx + RIy ~ SES_T1 + BMI_T1 + Race_Asian + Race_White + Race_Hispanic + Race_Black + Race_multi + Age_T2 # Constrained over time. 
+  
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.3.covariates.fit <- lavaan(RICLPM_3.covariates, data = merged_final, missing = 'ml.x', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.3.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+
+```
+
+```{r BMI EDS constrained covariates, eval = F}
+
+RICLPM_2.covariates <- '
+  # Create between components (random intercepts)
+ 
+  RIx =~1*EDS_bodyweight_MEAN_T2 + 1*EDS_bodyweight_MEAN_T3 + 1*EDS_bodyweight_MEAN_T4
+  RIy =~ 1*BMI_T2 + 1*BMI_T3 + 1*BMI_T4
+ 
+  
+  # Create within-person centered variables
+ 
+  wx2 =~ 1*EDS_bodyweight_MEAN_T2
+  wx3 =~ 1*EDS_bodyweight_MEAN_T3
+  wx4 =~ 1*EDS_bodyweight_MEAN_T4
+  
+  wy2 =~ 1*BMI_T2
+  wy3 =~ 1*BMI_T3
+  wy4 =~ 1*BMI_T4
+  
+     # Regression of random intercepts on covariates
+  RIx + RIy ~ SES_T1 + Race_Asian +  Race_White + Race_Hispanic + Race_Black + Race_multi + Age_T2 # Constrained over time. 
+
+  # Estimate the lagged effects between the within-person centered variables.
+  wx3 ~ a*wx2 + b*wy2      #pre-multiplication (*) with the same label constrains these paths to be equal over time 
+  wy3 ~ c*wx2 + d*wy2
+  wx4 ~ a*wx3 + b*wy3
+  wy4 ~ c*wx3 + d*wy3
+ 
+
+  # Estimate the covariance between the within-person centered variables at the first wave. 
+  wx2 ~~ wy2 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations).
+  wx3 ~~ wy3
+  wx4 ~~ wy4
+
+  
+  # Estimate the variance and covariance of the random intercepts. 
+  RIx ~~ RIx
+  RIy ~~ RIy
+  RIx ~~ RIy
+
+  # Estimate the (residual) variance of the within-person centered variables.
+  wx2 ~~ wx2 # Variances
+  wy2 ~~ wy2 
+  wx3 ~~ wx3 # Residual variances
+  wy3 ~~ wy3 
+  wx4 ~~ wx4 
+  wy4 ~~ wy4 
+ 
+'
+RICLPM.2.covariates.fit <- lavaan(RICLPM_2.covariates, data = merged_final, missing = 'ML', meanstructure = T, int.ov.free = T) 
+summary(RICLPM.2.covariates.fit, standardized = T, fit.measures = TRUE, ci = TRUE)
+
+```
+
+
+

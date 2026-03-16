@@ -1,0 +1,145 @@
+
+TITLE: CLPM no missing
+
+    MONTECARLO: NAMES ARE X1 X2 X3 Y1 Y2 Y3;
+    NOBSERVATIONS = 2279;
+    !CLASSES = c (1);
+    !GENCLASSES = c (1);
+    NREPS = 10000;
+    SEED = 73497;
+
+    SAVE = CLPM power.sav;
+    ANALYSIS:
+    !type = mixture;
+    ESTIMATOR = MLR;
+
+    MODEL montecarlo:
+    LX1 BY X1@1;
+    LX2 BY X2@1;
+    LX3 BY X3@1;
+    LY1 BY Y1@1;
+    LY2 BY Y2@1;
+    LY3 BY Y3@1;
+
+    LX1@1;
+    LX2@1;
+    LX3@1;
+    LY1@1;
+    LY2@1;
+    LY3@1;
+
+ !STEP 1. ALL VARIANCE OF OBSERVED@0, TO REPLICATE RESULTS WITH SIMPLE MODEL
+
+          X1@0;
+          X2@0;
+          X3@0;
+          Y1@0;
+          Y2@0;
+          Y3@0;
+
+ !STEP 2. OVERARCHING LATENT FACTORS, TO REMOVE BETWEEN-PERSON VARAINCE
+
+           LBY BY  Y1@1  Y2@1   Y3@1;
+           LBX BY  X1@1  X2@1   X3@1;
+           LBX WITH LBY*.40 ;
+           LBY@1;
+           LBX@1;
+
+           LBY    WITH  LX1  @0;
+
+           LBY    WITH  LY1  @0;
+
+           LBX    WITH  LX1  @0;
+
+           LBX    WITH  LY1  @0;
+
+
+
+! INCLUDING MEANS, SEE HAMAKER 2014
+! [ldis@1]; [ldel@1];
+
+! stability
+
+         LX2 on LX1*.25 ;
+         LX3 on LX2*.26 ;
+
+
+
+         LY2 on LY1*.63;
+         LY3 on LY2*.69;
+
+
+        ! corelations
+        LX1  with  LY1*.19;
+        LX2  with  LY2*.21;
+        LX3  with  LY3*.19;
+
+
+        ! cross-paths;
+          LX2 on LY1*.25;
+          LX3 on LY2*.09;
+
+
+          LY2 on LX1*.25;
+          LY3 on LX2*.09;
+          
+   MODEL:
+    LX1 BY X1@1;
+    LX2 BY X2@1;
+    LX3 BY X3@1;
+    LY1  BY Y1@1;
+    LY2  BY Y2@1;
+    LY3  BY Y3@1;
+
+    LX1@1;
+    LX2@1;
+    LX3@1;
+    LY1@1;
+    LY2@1;
+    LY3@1;
+    
+    X1@0;
+    X2@0;
+    X3@0;
+    Y1@0;
+    Y2@0;
+    Y3@0;
+    
+    LBY BY  Y1@1  Y2@1   Y3@1;
+    LBX BY  X1@1  X2@1   X3@1;
+    LBX WITH LBY*.40 ;
+    LBY@1;
+    LBX@1;
+
+    LBY    WITH  LX1  @0;
+
+    LBY    WITH  LY1  @0;
+
+    LBX    WITH  LX1  @0;
+
+    LBX    WITH  LY1  @0;
+
+    LX2 on LX1*.25 ;
+    LX3 on LX2*.26 ;
+
+
+
+    LY2 on LY1*.63;
+    LY3 on LY2*.69;
+
+    LX1  with  LY1*.19;
+    LX2  with  LY2*.21;
+    LX3  with  LY3*.19;
+
+    LX2 on LY1*.25;
+    LX3 on LY2*.09;
+
+    LY2 on LX1*.25;
+    LY3 on LX2*.09;
+          
+
+
+  
+    OUTPUT:   TECH9;
+
+

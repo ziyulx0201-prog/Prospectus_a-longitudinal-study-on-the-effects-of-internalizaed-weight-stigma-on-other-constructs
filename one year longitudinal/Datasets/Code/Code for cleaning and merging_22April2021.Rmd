@@ -1,0 +1,765 @@
+---
+title: "Austen & Griffiths (2021) code for data importation and cleaning"
+output: html_notebook
+---
+
+Please note: this code commences following de-identification of data, as well as calculation of race variables in SPSS. The syntax we used to calculate our race frequency vars is also available on our OSF page. Please contact Emma Austen (eausten@student.unimelb.edu.au) with any queries or suggestions! 
+
+For those interested in running models on our composite vars (i.e., our finalised dataset), please see our R notebook for our analysis code. This code is predominantly for data cleaning, as well as calculating Cronbach's alphas and missing data analyses for each timepoint. By the end of this notebook, the data should look identical to the "Final_merged_clean.csv" dataset on the OSF
+
+Throughout this code, variable names may not correspond with "timepoint" named in the dataset (e.g., there are _T2 variables in the T1 dataset/object): this is because the timepoint indicated in the variable name (denoted as _T1 or T2 or T3) takes into account the first demographic wave of Gay Bodies Worldwide (denoted by _T1 in all of the dataset variables, and T0 in the dataset/object var names). For the purpose of this paper, we renamed the timepoints of Gay Bodies Worldwide: Time 1 = Time 0 for this paper, Time 2 in variable names = Time 1 in this paper, Time 3 in variable names= Time 2 in this paper, and Time 4 in variable names = Time 3 in this paper. Apologies for any confusion :-) 
+
+#load packages
+```{r load packages}
+
+library(tidyverse) #for dplyr, ggplot, etc.
+library(haven) 
+library(digest) #for producing hash IDs
+library(psych) #for looking at descriptives 
+library(lubridate) #doing date things
+library(pastecs) #for descriptives table
+library(sjlabelled)
+library(anytime) #also for doing date things, when lubridate functions don't work
+
+
+```
+
+
+#Import raw, deidentified datasets 
+
+```{r}
+
+T0_raw <- read.csv("T0_demographics_raw.csv")
+
+T1_raw <- read.csv("T1_raw.csv")
+
+T2_raw <- read.csv("T2_raw.csv")
+
+T3_raw <- read.csv("T3_raw.csv")
+
+```
+
+#T0: demographic wave - calculating some variables and filtering to relevant demographic vars for analyses 
+```{r demographics}
+
+#BMI 
+
+  ##height vars
+
+  #because we sum across columns to create a combined height variable, we should assign missing values as 0 
+T0_raw$Height_FeetInches_1_New [is.na(T0_raw$Height_FeetInches_1_New)] = 0
+T0_raw$Height_FeetInches_2_New[is.na(T0_raw$Height_FeetInches_2_New)] = 0
+T0_raw$Height_Centimetres_1_New[is.na(T0_raw$Height_Centimetres_1_New)] = 0
+    #can use replace_na() in mutate instead of doing this lengthy version (see weight var calcs)
+
+
+T0_raw<- T0_raw %>% #need to assign to an object otherwise the transformations won't "stick"
+  mutate(Height_Centimetres_1_New = as.numeric(Height_Centimetres_1_New),
+         Height_FeetInches_1_New = as.numeric(Height_FeetInches_1_New), 
+         Height_FeetInches_2_New = as.numeric(Height_FeetInches_2_New)) %>% 
+  mutate(Height_FeetInches_convert=(Height_FeetInches_1_New*30.48) + (Height_FeetInches_2_New * 2.54)) %>%  #convert ft inches to cm
+  mutate(Height_combined = (Height_Centimetres_1_New + Height_FeetInches_convert)) %>%  #overall height variable (ie one metric for BMI calc)
+  mutate(Height_combined = na_if(Height_combined, 0)) %>%  #then we convert the 0's back to missing before we calc BMI
+  mutate(Height_meters = (Height_combined/100))
+
+
+  ##weight vars and final BMI calculation 
+
+T0_raw <- T0_raw %>%  
+  mutate(Weight_StonesPounds_1_New = replace_na(Weight_StonesPounds_1_New, 0)) %>% 
+  mutate(Weight_StonesPounds_convert = (Weight_StonesPounds_1_New * 6.35) + (Weight_StonesPounds_2_New/2.205)) %>% 
+  mutate(Weight_Pounds_convert = (Weight_Pounds_1_New/2.205)) %>% 
+  mutate(Weight_StonesPounds_convert = replace_na(Weight_StonesPounds_convert, 0), 
+         Weight_Pounds_convert = replace_na(Weight_Pounds_convert, 0), 
+         Weight_kilograms_1_New = replace_na(Weight_kilograms_1_New, 0), 
+         Weight_combined = (Weight_kilograms_1_New + Weight_StonesPounds_convert + Weight_Pounds_convert)) %>% 
+  mutate(Weight_combined_T1 = na_if(Weight_combined, 0)) %>%  
+  mutate(BMI_T1 =  Weight_combined_T1/ (Height_meters * Height_meters)) %>%  #BMI 
+  mutate(Day = 1, #set day of birth to 1st of month
+         Birthday = make_date(Year, Month, Day)) 
+  
+```
+
+##filter
+
+We won't need the weight stigma data from this wave, just the demographics 
+
+```{r}
+
+T0_raw <-  mutate(rename(T0_raw, Likelihood_T1 = Likelihood, 
+                SES_T1 = SES_ladder,
+                Duration_T1 = Duration__in_seconds, 
+                EndDate_T1 = EndDate,
+                StartDate_T1 = StartDate, 
+                Progress_T1 = Progress,  
+                Country_T1 = Country, 
+                Sex_identity_T1 = Sex_identity, 
+                Sex_attraction_T1 = Sex_Attraction, 
+                Sex_experiences_T1 = Sex_Experiences, 
+                Gender_T1 = Gender, 
+                Gender_assigned_T1 = Gender_assigned,
+                Height_meters_T1 = Height_meters))
+  
+T0_clean_unmerged <-T0_raw %>% 
+  select(ID:Progress_T1, EndDate_T1, Country_T1, Gender_T1:Sex_identity_T1, Sex_attraction_T1, Sex_experiences_T1, SES_T1, Likelihood_T1:Race_multi, Height_meters_T1, BMI_T1, Birthday) %>% 
+  mutate(Wave_1_complete = 1) #this complete = 1 variable is to help identify who participated in all waves versus dropped out of at least one 
+
+```
+
+#T1
+
+
+##investigate duplicate cases
+
+- extra cases (n = 12) seem to be rows with "NA" values for ID
+- filtering these cases to have a look at them, just looks like blank rows that have been inserted upon merging. Therefore, filter out 
+
+```{r duplicates}
+
+ID_obs <- T1_raw %>% count(ID)
+#looking at potential duplicate IDs 
+
+ID_check <- T1_raw %>% filter(ID %in% c(NA))
+#look at NA rows 
+
+T1_raw <- T1_raw %>% 
+  filter(!ID %in% c(NA)) #filter to IDs that are not NA, removes 12 obs, so this works!
+```
+
+
+##filter T2 cases out 
+
+- some T2 participants completed the T1 survey - so, we separate out these participants and merge them with the T2 file later 
+- filters out n = 219 
+- initial N (i.e., prior to cleaning - removing duplicates, progress <10, etc.) for T2 = 2382
+
+```{r}
+
+T1_raw$StartDate
+#date is formatted D/M/Y --> use below code to change to Y-M-D
+
+T1_raw$StartDate <- anydate(T1_raw$StartDate) 
+                            #converts this var into a readable date format that we can use to filter cases 
+                            #don't have to do this every time, but cleaning in SPSS made the date variable funny 
+
+T2_extras <- T1_raw %>% 
+  filter(StartDate > as.Date("2020-01-01")) #filters out the cases that are part of T2 collection 
+
+
+T1_raw<- T1_raw %>%  
+  filter(StartDate <= as.Date("2020-01-01"))  #make sure the way you specify the date is in the same order/format
+                                              #as the dates in the variable (e.g., Y/M/D vs D/M/Y)
+
+```
+
+## Calculate scale scores and weight vars for BMI to be calculated in final merge
+
+```{r}
+
+#weight vars
+T1_raw <- T1_raw %>%  
+  mutate(Weight_StonesPounds_1_New = replace_na(Weight_StonesPounds_1_New, 0)) %>% 
+  mutate(Weight_StonesPounds_convert = (Weight_StonesPounds_1_New * 6.35) + (Weight_StonesPounds_2_New/2.205)) %>% 
+  mutate(Weight_Pounds_convert = (Weight_Pounds_1_New/2.205)) %>% 
+  mutate(Weight_StonesPounds_convert = replace_na(Weight_StonesPounds_convert, 0), 
+         Weight_Pounds_convert = replace_na(Weight_Pounds_convert, 0), 
+         Weight_kilograms_1_New = replace_na(Weight_kilograms_1_New, 0), 
+         Weight_combined_T2 = (Weight_kilograms_1_New + Weight_StonesPounds_convert + Weight_Pounds_convert)) %>% 
+  mutate(Weight_combined_T2 = na_if(Weight_combined_T2, 0)) 
+
+#reverse code items and calculate composite (mean or total) scale scores
+
+T1_raw <-  mutate(rename(T1_raw, 
+                                            WBIS_M_1_r = WBISM_1_r, WBIS_M_2 = WBISM_2,
+                                            WBIS_M_3 = WBISM_3, WBIS_M_4 = WBISM_4, 
+                                            WBIS_M_5= WBISM_5, WBIS_M_6= WBISM_6, 
+                                            WBIS_M_7 = WBISM_7, WBIS_M_8= WBISM_8,
+                                            WBIS_M_9_r = WBISM_9_r, WBIS_M_10 = WBISM_10,
+                                            WBIS_M_11 = WBISM_11)) 
+
+T1_raw <- T1_raw %>%
+  mutate(WBIS_M_1r = 7 - WBIS_M_1_r,   #reverse scoring 
+       WBIS_M_9r = 7 - WBIS_M_9_r, 
+       WeightBias_1r = 7 - WeightBias_1, 
+       WeightBias_2r = 7 - WeightBias_2,
+       WeightBias_3r = 7 - WeightBias_3, 
+       WeightBias_4r = 7 - WeightBias_4, 
+       WeightBias_5r = 7 - WeightBias_5, 
+       WeightBias_6r = 7 - WeightBias_6, 
+       WeightBias_8r = 7 - WeightBias_8, 
+       WeightBias_14r = 7 - WeightBias_14,
+      Body_dissat_M_7r = 5 - Body_dissat_M_7_r) 
+
+
+T1_raw <- T1_raw %>% 
+    mutate(EDS_bodyweight_MEAN_T2 = rowMeans(select(., EDS_bodyweight_1:EDS_bodyweight_9)),#EDS = mean score 
+            WBIS_M_MEAN_T2 = rowMeans(select(., c(WBIS_M_2:WBIS_M_8, WBIS_M_10, WBIS_M_11,
+                                                  WBIS_M_1r, WBIS_M_9r))), #WBIS-M = mean score
+            WeightBias_MEAN_T2 = rowMeans(select(., c(WeightBias_1r:WeightBias_14r, WeightBias_7_r,   #UMB-F = mean score
+                                                 WeightBias_9_r:WeightBias_13_r, 
+                                                 WeightBias_15_r:WeightBias_20_r))),
+            AQoL_MSD_TOTAL_T2 = rowSums(select(., QoL_1_Psych_C1:QoL_35_MH5)), #AQoL = total score
+           AQoL_MSD_MEAN_T2 = rowMeans(select(., QoL_1_Psych_C1:QoL_35_MH5)), #AQoL mean score 
+           Body_dissat_MEAN_T2 = rowMeans(select(., c(Body_dissat_M_1:Body_dissat_M_6,Body_dissat_M_7r,
+                                                      Body_dissat_BF_1:Body_dissat_BF_5)))) #body dissat = mean score 
+
+
+T1_final <-    #renaming variables here to distinguish T1, T2, etc. 
+  mutate(rename(T1_raw, Duration_T2 = Durationinseconds,
+                StartDate_T2 = StartDate, 
+                EndDate_T2 = EndDate,
+                Progress_T2 = Progress, 
+                SES_T2 = SES_ladder, 
+                Country_T2 = Country, 
+                Sex_identity_T2 = Sex_identity, 
+                Sex_attraction_T2 = Sex_Attraction, 
+                Sex_experiences_T2 = Sex_Experiences, 
+                Likelihood_T2 = Likelihood))
+
+```
+
+
+##Clean
+- initial sample: N = 2382
+- participants who identified as heterosexual (n = 2)
+- those who did not proceed following the consent page/completed less than 10% of the survey completed (n = 83)
+- duplicate IDs (n = 7)
+- final sample N = 2271
+
+```{r}
+T1_final <- T1_final %>% 
+  dplyr::filter(Progress_T2 >= 10, Sex_identity_T2 != '4', ID != "385f34bb1bd82e704248ce485e2c6b27") 
+    #the ID here did not consent at consent_check (using argument consent_check != 0 didn't work)
+
+
+
+ID_obs <- T1_final %>% count(ID)
+#looking at potential duplicate IDs 
+
+ID_check <- T1_final %>% filter(ID %in% c("125e93c884feda7f45617e7d57c7bfc0", "13018f882364f9d96e08151d58e5eec8", "1706525c5bdce570840ca2d31927660d", "68138c82917f96952c0aeba9e30921a0",
+"6ae31aef820e81db5c94fc90280fc6c1", "75068bcc22da8f4a6ea05ade5a18cc2b", "	a4a53ec0bbe87ede4dad850f3154f2ba")) 
+
+#look at duplicate rows
+T1_final <- distinct(T1_final, ID, .keep_all = TRUE) #removes duplicated ID rows
+
+```
+
+
+##Missing data analysis 
+- Missing item level data ranged from 3.1 to 7.1% (M = 6.3%)
+- Non-parametric alternative MCAR test revealed no evidence to reject null hypothesis that data was missing at random (p >.05)
+``` {r}
+library(MissMech)
+library(finalfit)
+
+T1_missing <- T1_final %>%  
+  dplyr::select(EDS_bodyweight_1:WeightBias_20_r, Weight_combined_T2) %>%   
+        ff_glimpse()
+
+T1_missing_check <- T1_final[["Continuous"]][["missing_percent"]] #inspecting specific elements of missing data check, assigning to its own object 
+
+T1_missing_check <- as.numeric(T1_final) #transform to numeric var so we can run descriptives (e.g., M, range) 
+
+describe(T1_missing_check) #returns descriptives on missing percentage 
+
+
+#inspect patterns of missingness - MCAR? 
+T1_MCAR <- T1_final %>%  
+  dplyr::select(WBIS_M_1_r:WBIS_M_11, 
+         Body_dissat_M_1:Body_dissat_BF_5,QoL_1_Psych_C1:QoL_35_MH5,
+         EDS_bodyweight_1:EDS_bodyweight_9, WeightBias_1:WeightBias_9_r)
+
+TestMCARNormality(T1_MCAR)
+```
+
+##Cronbach's alphas
+
+- EDS = 0.92 (CI: 0.92, 0.93)
+- WBIS-M = 0.94 (0.93, 0.94)
+- MBAS-R = 0.88 (0.87, 0.89)
+- AQoL-8D = 0.95
+- UMB-F = 0.90
+
+```{r cronbach's alpha}
+
+#EDS
+T1_final %>% 
+  select(EDS_bodyweight_1:EDS_bodyweight_9) %>% 
+  alpha()
+
+#WBIS 
+
+T1_final %>% 
+  select(WBIS_M_2:WBIS_M_8, WBIS_M_9r, WBIS_M_1r, WBIS_M_10:WBIS_M_11) %>% 
+  alpha()
+
+#MBAS-R 
+
+T1_final %>% 
+  select(Body_dissat_M_1:Body_dissat_M_6,Body_dissat_M_7r,
+        Body_dissat_BF_1:Body_dissat_BF_5) %>% 
+  alpha()
+
+
+#UMB-F
+
+T1_final %>% 
+  select(WeightBias_1r:WeightBias_14r, WeightBias_7_r,   
+         WeightBias_9_r:WeightBias_13_r, 
+         WeightBias_15_r:WeightBias_20_r) %>% 
+  alpha()
+
+#AQoL
+
+ T1_final %>% 
+  select(QoL_1_Psych_C1:QoL_35_MH5) %>% 
+  alpha()
+
+```
+
+
+##Filter to vars used for analyses 
+
+```{r finalise dataset}
+
+T1_for_merging <- T1_final %>% 
+select(ID, StartDate_T2:Duration_T2, Sex_identity_T2, Sex_attraction_T2, Sex_experiences_T2, SES_T2, Country_T2, 
+       Weight_combined_T2, EDS_bodyweight_MEAN_T2:Body_dissat_MEAN_T2) %>% 
+  mutate(Wave_2_complete = 1)
+```
+
+
+#T2
+
+##investigate duplicate cases
+
+sample size looks a bit off so look if there are duplicates 
+- extra cases (n = 4) seem to be rows with "NA" values for ID
+- filtering these cases to have a look at them, just looks like blank rows that have been inserted upon merging. Therefore, filter out 
+
+```{r duplicates}
+
+ID_obs <- T2_raw %>% count(ID)
+#looking at potential duplicate IDs 
+
+ID_check <- T2_raw %>% filter(ID %in% c(NA))
+#look at NA rows 
+
+T2_merged_clean <- T2_raw %>% 
+  filter(!ID %in% c(NA))
+```
+
+
+##add extra data from W2
+- extras n = 219
+```{r}
+
+T2_merged_clean <- rbind(T2_merged_clean, T2_extras)
+
+#creates some duplicates, so remove those 
+
+T2_merged_clean <- distinct(T2_merged_clean, ID, .keep_all = TRUE) #removes duplicated ID rows
+
+```
+
+## Calculate scale scores and weight vars for BMI to be calculated in final merge
+
+```{r}
+
+#weight vars
+T2_merged_clean <- T2_merged_clean %>%  
+  mutate(Weight_StonesPounds_1_New = replace_na(Weight_StonesPounds_1_New, 0)) %>% 
+  mutate(Weight_StonesPounds_convert = (Weight_StonesPounds_1_New * 6.35) + (Weight_StonesPounds_2_New/2.205)) %>% 
+  mutate(Weight_Pounds_convert = (Weight_Pounds_1_New/2.205)) %>% 
+  mutate(Weight_StonesPounds_convert = replace_na(Weight_StonesPounds_convert, 0), 
+         Weight_Pounds_convert = replace_na(Weight_Pounds_convert, 0), 
+         Weight_kilograms_1_New = replace_na(Weight_kilograms_1_New, 0), 
+         Weight_combined_T3 = (Weight_kilograms_1_New + Weight_StonesPounds_convert + Weight_Pounds_convert)) %>% 
+  mutate(Weight_combined_T3 = na_if(Weight_combined_T3, 0)) 
+
+#reverse code items and calculate composite (mean or total) scale scores
+
+T2_merged_clean <-  mutate(rename(T2_merged_clean, 
+                                            WBIS_M_1_r = WBISM_1_r, WBIS_M_2 = WBISM_2,
+                                            WBIS_M_3 = WBISM_3, WBIS_M_4 = WBISM_4, 
+                                            WBIS_M_5= WBISM_5, WBIS_M_6= WBISM_6, 
+                                            WBIS_M_7 = WBISM_7, WBIS_M_8= WBISM_8,
+                                            WBIS_M_9_r = WBISM_9_r, WBIS_M_10 = WBISM_10,
+                                            WBIS_M_11 = WBISM_11)) 
+
+T2_merged_clean <- T2_merged_clean %>%
+  mutate(WBIS_M_1r = 7 - WBIS_M_1_r,   #reverse scoring 
+       WBIS_M_9r = 7 - WBIS_M_9_r, 
+       WeightBias_1r = 7 - WeightBias_1, 
+       WeightBias_2r = 7 - WeightBias_2,
+       WeightBias_3r = 7 - WeightBias_3, 
+       WeightBias_4r = 7 - WeightBias_4, 
+       WeightBias_5r = 7 - WeightBias_5, 
+       WeightBias_6r = 7 - WeightBias_6, 
+       WeightBias_8r = 7 - WeightBias_8, 
+       WeightBias_14r = 7 - WeightBias_14,
+      Body_dissat_M_7r = 5 - Body_dissat_M_7_r) 
+
+
+T2_merged_clean <- T2_merged_clean %>% 
+    mutate(EDS_bodyweight_MEAN_T3 = rowMeans(select(., EDS_bodyweight_1:EDS_bodyweight_9)),#EDS = mean score 
+            WBIS_M_MEAN_T3 = rowMeans(select(., c(WBIS_M_2:WBIS_M_8, WBIS_M_10, WBIS_M_11,
+                                                  WBIS_M_1r, WBIS_M_9r))), #WBIS-M = mean score
+            WeightBias_MEAN_T3 = rowMeans(select(., c(WeightBias_1r:WeightBias_14r, WeightBias_7_r,   #UMB-F = mean score
+                                                 WeightBias_9_r:WeightBias_13_r, 
+                                                 WeightBias_15_r:WeightBias_20_r))),
+            AQoL_MSD_TOTAL_T3 = rowSums(select(., QoL_1_Psych_C1:QoL_35_MH5)), #AQoL = total score
+           AQoL_MSD_MEAN_T3 = rowMeans(select(., QoL_1_Psych_C1:QoL_35_MH5)), #AQoL mean score 
+           Body_dissat_MEAN_T3 = rowMeans(select(., c(Body_dissat_M_1:Body_dissat_M_6,Body_dissat_M_7r,
+                                                      Body_dissat_BF_1:Body_dissat_BF_5)))) #body dissat = mean score 
+
+
+T2_final <-   #renaming variables here to distinguish T1, T2, etc. 
+  mutate(rename(T2_merged_clean, Duration_T3 = Durationinseconds,
+                StartDate_T3 = StartDate, 
+                EndDate_T3 = EndDate,
+                Progress_T3 = Progress, 
+                SES_T3 = SES_ladder, 
+                Country_T3 = Country, 
+                Sex_identity_T3 = Sex_identity, 
+                Sex_attraction_T3 = Sex_Attraction, 
+                Sex_experiences_T3 = Sex_Experiences, 
+                Likelihood_T3 = Likelihood))
+
+```
+
+
+## Clean
+- initial sample: N = 2008
+- participants who identified as heterosexual (n = 3)
+- those who did not proceed following the consent page/completed less than 10% of the survey completed (n = 59)
+- final sample N = 1936
+
+```{r}
+T2_final_clean <- T2_final %>% 
+  filter(Progress_T3 >= 10, Sex_identity_T3 != '4')
+
+T2_final_clean<-T2_final_clean[!(T2_final_clean$ID=="385f34bb1bd82e704248ce485e2c6b27" | T2_final_clean$ID=="4dcad14830cb5e7ffdb16bcbd5a35c33"),] 
+    #this is a workaround solution as R wouldn't let me exclude cases where Consent_check = 0
+
+```
+
+##Missing data analysis 
+- Missing item level data ranged from 3.4 to 6.0% (M = 5.1%)
+- Non-parametric alternative MCAR test revealed no evidence to reject null hypothesis that data was missing at random (p >.05)
+``` {r}
+library(MissMech)
+library(finalfit)
+
+T2_missing <- T2_final_clean %>%  
+  dplyr::select(EDS_bodyweight_1:WeightBias_20_r, Weight_combined_T3) %>%   
+        ff_glimpse()
+
+T2_missing_check <- T2_missing[["Continuous"]][["missing_percent"]] #inspecting specific elements of missing data check, assigning to its own object 
+
+T2_missing_check <- as.numeric(T2_missing_check) #transform to numeric var so we can run descriptives (e.g., M, range) 
+
+describe(T2_missing_check) #returns descriptives on missing percentage 
+
+
+#inspect patterns of missingness - MCAR? 
+T2_MCAR <- T2_final_clean %>%  
+  dplyr::select(WBIS_M_1_r:WBIS_M_11, 
+         Body_dissat_M_1:Body_dissat_BF_5,QoL_1_Psych_C1:QoL_35_MH5,
+         EDS_bodyweight_1:EDS_bodyweight_9, WeightBias_1:WeightBias_9_r)
+
+TestMCARNormality(T2_MCAR)
+```
+
+
+##Cronbach's alphas
+
+- EDS = 0.92 (CI: 0.92, 0.93)
+- WBIS-M = 0.94 (0.93, 0.94)
+- MBAS-R = 0.89 (0.88, 0.89)
+- AQoL-8D = 0.95
+- UMB-F = 0.90
+
+```{r cronbach's alpha}
+
+#EDS
+T2_final_clean %>% 
+  select(EDS_bodyweight_1:EDS_bodyweight_9) %>% 
+  alpha()
+
+#WBIS 
+
+T2_final_clean %>% 
+  select(WBIS_M_2:WBIS_M_8, WBIS_M_9r, WBIS_M_1r, WBIS_M_10:WBIS_M_11) %>% 
+  alpha()
+
+#MBAS-R 
+
+T2_final_clean %>% 
+  select(Body_dissat_M_1:Body_dissat_M_6,Body_dissat_M_7r,
+        Body_dissat_BF_1:Body_dissat_BF_5) %>% 
+  alpha()
+
+
+#UMB-F
+
+T2_final_clean %>% 
+  select(WeightBias_1r:WeightBias_14r, WeightBias_7_r,   
+         WeightBias_9_r:WeightBias_13_r, 
+         WeightBias_15_r:WeightBias_20_r) %>% 
+  alpha()
+
+#AQoL
+
+ T2_final_clean %>% 
+  select(QoL_1_Psych_C1:QoL_35_MH5) %>% 
+  alpha()
+
+```
+
+
+##Filter to vars needed for merging 
+
+```{r finalise dataset}
+T2_for_merging <- T2_final_clean %>% 
+  select(ID, StartDate_T3:Duration_T3, Sex_identity_T3, Sex_attraction_T3, Sex_experiences_T3, SES_T3, Country_T3, 
+       Weight_combined_T3, EDS_bodyweight_MEAN_T3:Body_dissat_MEAN_T3)  %>% 
+  mutate(Wave_3_complete = 1)
+
+```
+
+
+#T3
+
+
+##investigate duplicate cases
+
+sample size looks a bit off so look if there are duplicates 
+- extra cases (n = 9) seem to be rows with "NA" values for ID
+- filtering these cases to have a look at them, just looks like blank rows that have been inserted upon merging. Therefore, filter out 
+
+```{r duplicates}
+
+ID_obs <- T3_raw %>% count(ID)
+#looking at potential duplicate IDs 
+
+T3_merged_clean <- T3_raw  %>% 
+  filter(!ID %in% c(NA))
+
+ID_check <- T3_merged_clean %>% filter(ID %in% c("052bf7db23b2359225e84928063d65ec", "16dbf271a8c50ff91be053cb9c244e8a", 
+                    "13018f882364f9d96e08151d58e5eec8", "16dbf271a8c50ff91be053cb9c244e8a"))
+#look at duplicates
+
+
+```
+
+## Calculate scale scores and weight vars for BMI to be calculated in final merge
+
+```{r}
+
+#weight vars
+T3_merged_clean <- T3_merged_clean %>%  
+  mutate(Weight_StonesPounds_1_New = replace_na(Weight_StonesPounds_1_New, 0)) %>% 
+  mutate(Weight_StonesPounds_convert = (Weight_StonesPounds_1_New * 6.35) + (Weight_StonesPounds_2_New/2.205)) %>% 
+  mutate(Weight_Pounds_convert = (Weight_Pounds_1_New/2.205)) %>% 
+  mutate(Weight_StonesPounds_convert = replace_na(Weight_StonesPounds_convert, 0), 
+         Weight_Pounds_convert = replace_na(Weight_Pounds_convert, 0), 
+         Weight_kilograms_1_New = replace_na(Weight_kilograms_1_New, 0), 
+         Weight_combined_T4 = (Weight_kilograms_1_New + Weight_StonesPounds_convert + Weight_Pounds_convert)) %>% 
+  mutate(Weight_combined_T4 = na_if(Weight_combined_T4, 0)) 
+
+#reverse code items and calculate composite (mean or total) scale scores
+
+T3_merged_clean <-  mutate(rename(T3_merged_clean, 
+                                            WBIS_M_1_r = WBISM_1_r, WBIS_M_2 = WBISM_2,
+                                            WBIS_M_3 = WBISM_3, WBIS_M_4 = WBISM_4, 
+                                            WBIS_M_5= WBISM_5, WBIS_M_6= WBISM_6, 
+                                            WBIS_M_7 = WBISM_7, WBIS_M_8= WBISM_8,
+                                            WBIS_M_9_r = WBISM_9_r, WBIS_M_10 = WBISM_10,
+                                            WBIS_M_11 = WBISM_11)) 
+
+T3_merged_clean <- T3_merged_clean %>%
+  mutate(WBIS_M_1r = 7 - WBIS_M_1_r,   #reverse scoring 
+       WBIS_M_9r = 7 - WBIS_M_9_r, 
+       WeightBias_1r = 7 - WeightBias_1, 
+       WeightBias_2r = 7 - WeightBias_2,
+       WeightBias_3r = 7 - WeightBias_3, 
+       WeightBias_4r = 7 - WeightBias_4, 
+       WeightBias_5r = 7 - WeightBias_5, 
+       WeightBias_6r = 7 - WeightBias_6, 
+       WeightBias_8r = 7 - WeightBias_8, 
+       WeightBias_14r = 7 - WeightBias_14,
+      Body_dissat_M_7r = 5 - Body_dissat_M_7_r) 
+
+
+T3_merged_clean <- T3_merged_clean %>% 
+    mutate(EDS_bodyweight_MEAN_T4 = rowMeans(select(., EDS_bodyweight_1:EDS_bodyweight_9)),#EDS = mean score 
+            WBIS_M_MEAN_T4 = rowMeans(select(., c(WBIS_M_2:WBIS_M_8, WBIS_M_10, WBIS_M_11,
+                                                  WBIS_M_1r, WBIS_M_9r))), #WBIS-M = mean score
+            WeightBias_MEAN_T4 = rowMeans(select(., c(WeightBias_1r:WeightBias_14r, WeightBias_7_r,   #UMB-F = mean score
+                                                 WeightBias_9_r:WeightBias_13_r, 
+                                                 WeightBias_15_r:WeightBias_20_r))),
+            AQoL_MSD_TOTAL_T4 = rowSums(select(., QoL_1_Psych_C1:QoL_35_MH5)), #AQoL = total score
+           AQoL_MSD_MEAN_T4 = rowMeans(select(., QoL_1_Psych_C1:QoL_35_MH5)),
+           Body_dissat_MEAN_T4 = rowMeans(select(., c(Body_dissat_M_1:Body_dissat_M_6,Body_dissat_M_7r,
+                                                      Body_dissat_BF_1:Body_dissat_BF_5)))) #body dissat = mean score 
+
+
+T3_final <-    #renaming variables here to distinguish T1, T2, etc. 
+  mutate(rename(T3_merged_clean, Duration_T4 = Durationinseconds,
+                StartDate_T4 = StartDate, 
+                EndDate_T4 = EndDate,
+                Progress_T4 = Progress, 
+                SES_T4 = SES_ladder, 
+                Country_T4 = Country, 
+                Sex_identity_T4 = Sex_identity, 
+                Sex_attraction_T4 = Sex_Attraction, 
+                Sex_experiences_T4 = Sex_Experiences, 
+                Likelihood_T4 = Likelihood))
+
+```
+
+
+## Clean
+- initial sample: N = 1811
+- participants who identified as heterosexual (n = 5)
+- duplicates (n = 12)
+- those who did not proceed following the consent page/completed less than 10% of the survey completed (n = 41)
+- final sample N = 1730 
+
+```{r}
+T3_final_clean <- T3_final %>% 
+  filter(Progress_T4 >= 10, Sex_identity_T4 != '4')
+
+
+T3_final_clean<-T3_final_clean[!(T3_final_clean$ID=="	39c948759824bdd4de7a3d47eef330e5" | T3_final_clean$ID=="6d8441308d4ad4cbfa14092f597fc1c9"),] 
+    #this is a workaround solution as R wouldn't let me exclude cases where Consent_check = 0
+
+
+T3_final_clean <- distinct(T3_final_clean, ID, .keep_all = TRUE) #removes duplicated ID rows
+
+```
+
+## Missing data analysis 
+- Missing item level data ranged from 3.2 to 5.4%  (M = 4.98%)
+- Non-parametric alternative MCAR test revealed no evidence to reject null hypothesis that data was missing at random (p >.05)
+``` {r}
+library(MissMech)
+library(finalfit)
+
+T3_missing <- T3_final_clean %>%  
+  dplyr::select(EDS_bodyweight_1:WeightBias_20_r, Weight_combined_T4) %>%   
+        ff_glimpse()
+
+T3_missing_check <- T3_missing[["Continuous"]][["missing_percent"]] #inspecting specific elements of missing data check, assigning to its own object 
+
+T3_missing_check <- as.numeric(T3_missing_check) #transform to numeric var so we can run descriptives (e.g., M, range) 
+
+describe(T3_missing_check) #returns descriptives on missing percentage 
+
+
+#inspect patterns of missingness - MCAR? 
+T3_MCAR <- T3_final_clean %>%  
+  dplyr::select(WBIS_M_1_r:WBIS_M_11, 
+         Body_dissat_M_1:Body_dissat_BF_5,QoL_1_Psych_C1:QoL_35_MH5,
+         EDS_bodyweight_1:EDS_bodyweight_9, WeightBias_1:WeightBias_9_r)
+
+TestMCARNormality(T3_MCAR)
+```
+
+
+
+##Cronbach's alphas
+
+- EDS = 0.92 (CI: 0.92, 0.93)
+- WBIS-M = 0.94 (0.93, 0.94)
+- MBAS-R = 0.89 (0.88, 0.89)
+- AQoL-8D = 0.95
+- UMB-F = 0.90
+
+```{r cronbach's alpha}
+
+#EDS
+T3_final_clean %>% 
+  select(EDS_bodyweight_1:EDS_bodyweight_9) %>% 
+  alpha()
+
+#WBIS 
+
+T3_final_clean %>% 
+  select(WBIS_M_2:WBIS_M_8, WBIS_M_9r, WBIS_M_1r, WBIS_M_10:WBIS_M_11) %>% 
+  alpha()
+
+#MBAS-R 
+
+T3_final_clean %>% 
+  select(Body_dissat_M_1:Body_dissat_M_6,Body_dissat_M_7r,
+        Body_dissat_BF_1:Body_dissat_BF_5) %>% 
+  alpha()
+
+
+#UMB-F
+
+T3_final_clean %>% 
+  select(WeightBias_1r:WeightBias_14r, WeightBias_7_r,   
+         WeightBias_9_r:WeightBias_13_r, 
+         WeightBias_15_r:WeightBias_20_r) %>% 
+  alpha()
+
+#AQoL
+
+ T3_final_clean %>% 
+  select(QoL_1_Psych_C1:QoL_35_MH5) %>% 
+  alpha()
+
+```
+
+##Filter to vars for merging
+
+```{r finalise dataset}
+T3_for_merging <- T3_final_clean %>% 
+  select(ID, StartDate_T4:Duration_T4, Sex_identity_T4, Sex_attraction_T4, Sex_experiences_T4, SES_T4, Country_T4, 
+       Weight_combined_T4, EDS_bodyweight_MEAN_T4:Body_dissat_MEAN_T4) %>% 
+  mutate(Wave_4_complete = 1)
+
+```
+
+#merging 
+
+```{r}
+
+
+merged <- list(T0_for_merging, T1_for_merging, T2_for_merging, T3_for_merging) %>% #use list() to merge more than two dataframes 
+  reduce(left_join, by = "ID")
+
+```
+ 
+
+##filter to only those people enrolled in longitudinal component of GBW
+```{r}
+#d4cd0dabcf4caa22ad92fab40844c786 = no ID = not enrolled in followup 
+
+
+merged_2 <- merged %>% 
+  filter(!ID %in% c("d4cd0dabcf4caa22ad92fab40844c786"))
+
+
+```
+
+
+##Age, BMI calculation for T1, T2, T3
+```{r}
+merged_2 <- merged_2 %>% 
+  mutate(EndDate_T2 = anydate(EndDate_T2),  #Need to convert the date vars to an "unambiguous format" 
+         EndDate_T3 = anydate(EndDate_T3),
+         EndDate_T4 = anydate(EndDate_T4)) %>% 
+  mutate(Age_T2 = as.numeric(difftime(EndDate_T2, Birthday, unit = "days")/365.25), #Age
+         Age_T3 = as.numeric(difftime(EndDate_T3, Birthday, unit = "days")/365.25),
+         Age_T4 = as.numeric(difftime(EndDate_T4, Birthday, unit = "days")/365.25),
+         BMI_T2 = Weight_combined_T2/(Height_meters_T1 * Height_meters_T1), #BMI
+         BMI_T3 = Weight_combined_T3/(Height_meters_T1 * Height_meters_T1), 
+         BMI_T4 = Weight_combined_T4/(Height_meters_T1 * Height_meters_T1))
+
+```
+
+

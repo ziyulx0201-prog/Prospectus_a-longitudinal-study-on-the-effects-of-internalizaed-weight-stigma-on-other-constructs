@@ -1,0 +1,65 @@
+---
+title: "Prospectus"
+author: Ziyu Li
+Student Number: yc573381
+---
+The data for this project come from Austen & Griffiths (2022): <https://osf.io/tb25g/overview>. The authors kindly shared their raw data and analytic syntax on the Open Science Framework (OSF): <https://www.sciencedirect.com/science/article/pii/S1740144521001303?casa_token=VLUW4GlQOacAAAAA:395aaI3GAruhtWi6Aj-ZajPhEvWR2i-XR5TlzJxJzx3-6X-b1pHdh8AQAL-WTSlYelMxGQY_rw>.
+```{r}
+#| label: setup
+#| include: false
+
+# Load your packages
+library(tidyverse)
+library(here)
+
+# 1. Create a "data" folder
+if (!dir.exists(here("data"))) {
+  dir.create(here("data"))
+}
+
+# 2. Define the path and name for the dataset
+austen_data_path <- here("data", "Final_merged_clean.csv")
+
+# 3. Download file
+download.file(
+    "https://osf.io/download/mc9tj/", 
+    destfile = austen_data_path,
+    mode = "wb" 
+  )
+
+# 4. Read the dataset
+df <- read_csv(austen_data_path)
+```
+
+# a. A brief description of your research question(s) and relevant background
+The primary focus of my ongoing research investigates the effects of internalized weight stigma on emotional eating and life satisfaction, specifically examining how self-compassion and body functionality appreciation may moderate or mediate this process. As data collection for that project is currently underway, this prospectus utilizes an open-access longitudinal dataset to examine the related construct of weight stigma among sexual minority men. According to the original study by Austen and Griffiths (2022) , internalized weight bias operates in a reciprocal feedback loop with both Body Mass Index (BMI) and psychological quality of life. Specifically, within-person increases in internalized weight bias were shown to predict subsequent increases in BMI and decreases in psychological quality of life over a 12-month period, and vice-versa.
+
+# b. Design and structure of your data
+This project intend to use an open-access dataset from a 12-month longitudinal cohort study. The final sample consists of 2,953 sexual minority men ($M_{age} = 37.70$, $SD = 13.70$). The data structure features three distinct time-points, collected at approximately six-month intervals (baseline, 6-month follow-up, and 12-month follow-up). The original dataset encompasses a wide array of self-report measures, including demographic data (race, height and weight), socioeconomic status, body dissatisfaction, everyday weight discrimination, universal weight bias, internalized weight bias, and psychological quality of life.
+
+To replicate and extend the original findings, the primary continuous variables selected for this analysis are internalized weight bias (assessed via the Modified Weight Bias Internalization Scale) and psychological quality of life (assessed via the Assessment of Quality of Life-8D). At baseline, participants had a mean BMI of 26.40 ($SD = 6.04$). Average internalized weight bias was 3.40 ($SD = 1.53$), and psychological quality of life scores averaged 64.00 ($SD = 16.70$). 
+
+In addition to replicating the original study, the proposed project extends the literature by conducting a moderation analysis to examine whether these longitudinal relationships differ across distinct body size classifications. To facilitate this multi-group approach, the continuous baseline BMI variable was transformed into a categorical grouping variable, yielding robust sub-samples for the normal weight (n = 1,013), overweight (n = 693), and obese (n = 499) categories.
+
+# c. A preliminary plan for statistical analysis
+The first step would be a replication of the original study, Asten & Griffiths (2022) have already shared their syntax for dealing with the missing data and for running the RI-CLPM on OSF. The second step is to extend the analysis to test for moderation using a Multiple-Group RI-CLPM (MG-RI-CLPM). Specifically, the newly created baseline BMI classifications (normal weight, overweight, and obese) will be used as the grouping variable. To determine whether the reciprocal, within-person relationships between internalized weight bias and psychological quality of life differ across body sizes, an unconstrained model (where cross-lagged parameters are freely estimated across the three groups) will be compared to a fully constrained model (where these specific paths are held equal) using a chi-square difference test (Likelihood Ratio Test).
+
+# d. Additional information that would facilitate discussions
+
+```{r}
+# 1. Recreate the BMI_Category column
+df <- df %>%
+  mutate(BMI_Category = case_when(
+    BMI_T2 < 25 ~ "Normal Weight",
+    BMI_T2 >= 25 & BMI_T2 < 30 ~ "Overweight",
+    BMI_T2 >= 30 ~ "Obese",
+    TRUE ~ NA_character_ 
+  ))
+
+# 2. Count the participants in each group
+df %>%
+  count(BMI_Category) %>%
+  mutate(Percentage = round(n / sum(n) * 100, 1))
+```
+
+The data analytic scripts and supplemental materials for this project will be available at
